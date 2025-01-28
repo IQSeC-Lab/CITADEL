@@ -86,6 +86,34 @@ def main():
     for _, label in enumerate(np.unique(y_train)):
         new_y_mapping[label] = label
     
+    """
+    Step (2): Variable names and file names.
+    """
+    # some commonly used variables.
+    if args.train_start != args.train_end:
+        train_dataset_name = f'{args.train_start}to{args.train_end}'
+    else:
+        train_dataset_name = f'{args.train_start}'
+
+    SAVED_MODEL_FOLDER = 'models/'
+    # only based on malicious training samples
+    NUM_FEATURES = X_train.shape[1]
+    NUM_CLASSES = len(np.unique(y_train))
+
+    logging.info(f'Number of features: {NUM_FEATURES}; Number of classes: {NUM_CLASSES}')
+
+    # convert y_train to y_train_binary
+    y_train_binary = np.array([1 if item != 0 else 0 for item in y_train])
+    BIN_NUM_CLASSES = 2
+
+
+    """
+    Step (3): Train the encoder model.
+    `encoder` needs to have the same APIs.
+    If they don't have the required API, we could use a wrapper.
+    """
+
+    
 
 
 
