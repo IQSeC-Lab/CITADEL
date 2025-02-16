@@ -87,11 +87,11 @@ if __name__ == "__main__":
     print("Top K similar Weights: ", topk_sim_weight)
     print("Top K similar Indices: ", topk_sim_indices)
 
-    # feature_labels = torch.randint(0, 2, (10, 10))  # Generates 0 or 1 randomly
+    feature_labels = torch.randint(0, 2, (10, 10))  # Generates 0 or 1 randomly
 
-    # pseudo_labels = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels, batch_size=10)
+    pseudo_labels = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels, batch_size=10)
 
-    # print("Pesudo Labels: ", pseudo_labels)
+    print("Pesudo Labels: ", pseudo_labels)
     
 
     # cosine_score = similarity.cosine(train_features, test_features)
