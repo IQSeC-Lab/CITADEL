@@ -20,6 +20,7 @@ class Similarity:
     
     def el2norm(self, A, B, lambda_factor=1.0):
         """Compute EL2Norm similarity between vectors A and B."""
+        # Need to Look for the way of implementing EL2Norm
         euclidean_distance = np.linalg.norm(A - B)
         return np.exp(-lambda_factor * euclidean_distance)
     
