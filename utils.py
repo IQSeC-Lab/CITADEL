@@ -5,6 +5,9 @@ import argparse
 import math
 import numpy as np
 import torch
+from sklearn.metrics import confusion_matrix, accuracy_score
+from collections import Counter, defaultdict
+from common import get_model_stats, to_categorical
 
 def parse_args():
     """Parse the command line configuration for a particular run.
@@ -15,18 +18,12 @@ def parse_args():
     p = argparse.ArgumentParser()
 
     p.add_argument('--data', help='The dataset to use.')
-    
+
     # for debugging messages
     p.add_argument('--verbose', action='store_true',
                     help='whether to print the debugging logs.')
-
-    '''
-    p.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
-    p.add_argument('--temperature', default=0.5, type=float, help='Temperature used in softmax')
-    p.add_argument('--k', default=200, type=int, help='Top k most similar images used to predict the label')
-    p.add_argument('--batch_size', default=512, type=int, help='Number of images in each mini-batch')
-    p.add_argument('--epochs', default=500, type=int, help='Number of sweeps over the dataset to train')
-    '''
+    
+    p.add_argument('--bsize', default=512, type=int, help='Number of images in each mini-batch')
 
 
 
@@ -47,28 +44,85 @@ def parse_args():
     p.add_argument('--unc', action='store_true', help='Uncertain sampling')
 
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
-
+    '''
     # encoder model
     p.add_argument('--encoder', default=None, \
-                    choices=['cae', 'enc', 'mlp', \
-                            'simple-enc-mlp'], \
+                    choices=['cae', 'enc', 'mlp', 'simple-enc-mlp'], \
                     help='The encoder model to get embeddings of the input.')
+    p.add_argument('--enc-hidden',
+                help='The hidden layers of the encoder, example: "512-128-32"')
+    p.add_argument('--learning_rate', default=0.01, type=float,
+                   help='Overall learning rate.')
+    p.add_argument('--optimizer', default='adam', type=str, choices=['adam', 'sgd'],
+                        help='Choosing an optimzer')
+    p.add_argument('--epochs', default=250, type=int,
+                   help='Training epochs.')
+    p.add_argument('--loss_func', default='hi-dist-xent',
+            choices=['triplet', 'triplet-mse', 'hi-dist-xent'],
+            help='contrastive loss function choice.')
+    # classifier
+    p.add_argument('-c', '--classifier', default='svm',
+                   choices=['mlp', 'svm', 'gbdt', 'simple-enc-mlp'],
+                   help='The target classifier to use.')
+    
+    p.add_argument('--mlp-hidden',
+                   help='The hidden layers of the MLP classifier, example: "100-30", which in drebin_new_7 case would make the architecture as 1340-100-30-7')
+    p.add_argument('--mlp-batch-size', default=32, type=int,
+                   help='MLP classifier batch_size.')
+    p.add_argument('--mlp-lr', default=0.001, type=float,
+                   help='MLP classifier Adam learning rate.')
+    p.add_argument('--mlp-epochs', default=50, type=int,
+                   help='MLP classifier epochs.')
+    p.add_argument('--mlp-dropout', default=0.2, type=float,
+                   help='MLP classifier Droput rate.')
+
+
+    p.add_argument('--snapshot', action='store_true',
+                   help='Whether to save the model at every 50 epoch.')
+    
+    p.add_argument('--sampler', type=str, choices=['mperclass', 'proportional', 'half',
+                    'triplet', 'random'],
+                   help='The sampler to sample batches.')
+    p.add_argument('--scheduler', default='step', type=str, choices=['step', 'cosine'],
+                   help='Choosing the learning rate decay scheduler.')
+    p.add_argument('--lr_decay_rate', type=float, default=1,
+                        help='decay rate for learning rate')
+    p.add_argument('--lr_decay_epochs', type=str, default='30,1000,30',
+                        help='where to decay lr. start epoch, end epoch, step size.')
+    p.add_argument('--xent-lambda', default=1, type=float,
+                   help='lambda to scale the binary cross entropy loss.')
+    
+    p.add_argument('--count', type=int, default=200, help='Sampling count')
+    p.add_argument('--warm_learning_rate', default=0.001, type=float,
+                   help='Warm start learning rate.')
+    p.add_argument('--display-interval', default=10, type=int,
+                    help='Show logs about loss and other information every xxx epochs when training the encoder.')
+    p.add_argument('--local_pseudo_loss', action='store_true', help='Use local pseudo loss to select samples')
+    p.add_argument('--reduce', type=str, choices=['none', 'max', 'mean'],
+                    help='how to reduce the loss to compute the pseudo loss')
+    p.add_argument('--sample_reduce', type=str, choices=['mean', 'max'],
+                    help='how to reduce the loss per sample')
+    p.add_argument('--margin', default=10.0, type=float,
+                    help='Maximum margins of dissimilar samples when training contrastive autoencoder.')
+    p.add_argument('--cls-feat', type=str, default='input', choices=['encoded', 'input'],
+                   help='input features for the classifier.')
+    
+    p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
+    p.add_argument('--eval_multi', action='store_true', help='evaluate multi-class prediction performance.')
+    p.add_argument('--multi_class', action='store_true', help='train multi-class.')
+
+    '''
     p.add_argument('--encoder-retrain', action='store_true',
                    help='Whether to train the encoder again.')
     p.add_argument('--cold-start', action='store_true',
                    help='Whether to retrain the encoder from scratch.')
     
-    # classifier
-    p.add_argument('-c', '--classifier', default='svm',
-                   choices=['mlp', 'svm', 'gbdt', \
-                            'simple-enc-mlp'],
-                   help='The target classifier to use.')
+    
     # more arguments can be added here
 
     
     # arguments for the Encoder Classifier model.
-    p.add_argument('--enc-hidden',
-                help='The hidden layers of the encoder, example: "512-128-32"')
+    
     p.add_argument('--bsize', default=None, type=int,
                    help='Training batch size.')
     p.add_argument('--plb', default=None, type=int,
@@ -85,8 +139,7 @@ def parse_args():
                         help='decay rate for learning rate')
     p.add_argument('--lr_decay_epochs', type=str, default='30,1000,30',
                         help='where to decay lr. start epoch, end epoch, step size.')
-    p.add_argument('--optimizer', default='adam', type=str, choices=['adam', 'sgd'],
-                        help='Choosing an optimzer')
+    
     p.add_argument('--al_optimizer', default=None, type=str, choices=['adam', 'sgd'],
                         help='Choosing an optimzer')
     p.add_argument('--epochs', default=250, type=int,
@@ -120,11 +173,158 @@ def parse_args():
     p.add_argument('--display-interval', default=10, type=int,
                     help='Show logs about loss and other information every xxx epochs when training the encoder.')
                
+    p.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
+    p.add_argument('--temperature', default=0.5, type=float, help='Temperature used in softmax')
+    p.add_argument('--k', default=200, type=int, help='Top k most similar images used to predict the label')
+    
+    p.add_argument('--epochs', default=500, type=int, help='Number of sweeps over the dataset to train')
+    
     '''
-    p.add_argument('--log_path', type=str,
-                   help='log file name.')
+    p.add_argument('--log_path', type=str, help='log file name.')
 
     args = p.parse_args()
 
     return args
     
+def create_folder(name):
+    if not os.path.exists(name):
+        os.makedirs(name)
+
+def get_model_dims(model_name, input_layer_num, hidden_layer_num, output_layer_num):
+    """convert hidden layer arguments to the architecture of a model (list)
+
+    Arguments:
+        model_name {str} -- 'MLP' or 'Contrastive AE' or 'Encoder'.
+        input_layer_num {int} -- The number of the features.
+        hidden_layer_num {str} -- The '-' connected numbers indicating the number of neurons in hidden layers.
+        output_layer_num {int} -- The number of the classes.
+
+    Returns:
+        [list] -- List represented model architecture.
+    """
+    try:
+        if '-' not in hidden_layer_num:
+            if model_name == 'MLP':
+                dims = [input_layer_num, int(hidden_layer_num), output_layer_num]
+            else:
+                dims = [input_layer_num, int(hidden_layer_num)]
+        else:
+            hidden_layers = [int(dim) for dim in hidden_layer_num.split('-')]
+            dims = [input_layer_num]
+            for dim in hidden_layers:
+                dims.append(dim)
+            if model_name == 'MLP':
+                dims.append(output_layer_num)
+        logging.debug(f'{model_name} dims: {dims}')
+    except:
+        logging.error(f'get_model_dims {model_name}')
+        sys.exit(-1)
+
+    return dims
+
+
+def eval_classifier(args, classifier, cur_month_str, X, y_binary, y_family, train_families, \
+                        fout, fam_out, stat_out, gpu = False, multi = False):
+    if gpu == True:
+        X_tensor = torch.from_numpy(X).float()
+        if torch.cuda.is_available():
+            X_tensor = X_tensor.cuda()
+            y_pred = classifier.cuda().predict(X_tensor)
+            y_pred = y_pred.cpu().detach().numpy()
+        else:
+            y_pred = classifier.predict(X_tensor).numpy()
+    else:
+        y_pred = classifier.predict(X)
+    
+    # logging.info(f'y_pred[0]: {y_pred[0]}')
+    # logging.info(f'y_binary[0]: {y_binary[0]}')
+    if args.multi_class == True:
+        # process multi-class y_pred to binary
+        # if y_pred is 0, it is 0, otherwise it is 1
+        y_pred_bin = np.where(y_pred == 0, 0, 1)
+    else:
+        y_pred_bin = y_pred
+
+    tpr, tnr, fpr, fnr, acc, precision, f1 = get_model_stats(y_binary, y_pred_bin, multi_class = multi)
+    fout.write('%s\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\n' % \
+                (cur_month_str, tpr, tnr, fpr, fnr, acc, precision, f1))
+    fout.flush()
+    if multi == False:
+        tn, fp, fn, tp = confusion_matrix(y_binary, y_pred_bin).ravel()
+        stat_out.write('%s\t%d\t%d\t%d\t%d\t%d\n' % \
+                    (cur_month_str, X.shape[0], tp, tn, fp, fn))
+        stat_out.flush()
+
+    # check FNR within different families.
+    family_cnt = defaultdict(lambda: 0)
+    for idx, family in enumerate(y_family):
+        family_cnt[family] += 1
+    neg_by_fam = defaultdict(lambda: 0)
+    family_to_idx = defaultdict(list)
+    # y_family can be all_train_family since we only care abou False Negatives
+    fn_indices = np.where((y_binary != y_pred_bin) & (y_binary != 0))[0]
+    for idx in fn_indices:
+        family = y_family[idx]
+        neg_by_fam[family] += 1
+        family_to_idx[family].append(idx)
+    for family, neg_cnt in neg_by_fam.items():
+        new = family not in train_families
+        fam_total = family_cnt[family]
+        fam_rate = neg_cnt / float(fam_total)
+        fam_out.write('%s\t%s\t%s\t%s\t%d\n' % (cur_month_str, new, family, fam_rate, neg_cnt))
+        fam_out.flush()
+    return y_pred, neg_by_fam, family_to_idx
+
+
+def adjust_learning_rate(args, optimizer, epoch, warm = False):
+    if warm == False:
+        lr = args.learning_rate
+    else:
+        lr = args.warm_learning_rate
+    # use the same learning rate scheduler in active learning and initial training
+    if args.scheduler == 'cosine':
+        # eta_min = 1e-11
+        eta_min = 0
+        lr = eta_min + (lr - eta_min) * (
+                1 + math.cos(math.pi * epoch / args.epochs)) / 2
+    elif args.scheduler == 'step':
+        steps = np.sum(str(epoch) > np.asarray(args.lr_decay_epochs))
+        if steps > 0:
+            lr = lr * (args.lr_decay_rate ** steps)
+    else:
+        raise Exception('scheduler {args.scheduler} not supported yet.}')
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+        
+    return lr
+
+# From https://github.com/HobbitLong/SupContrast
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+# From https://github.com/HobbitLong/SupContrast
+def save_model(model, optimizer, opt, epoch, save_file):
+    print('==> Saving...')
+    state = {
+        'opt': opt,
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epoch': epoch,
+    }
+    torch.save(state, save_file)
+    del state
