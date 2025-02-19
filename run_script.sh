@@ -30,6 +30,8 @@ python -u main.py	                                \
             --mdate 20230501                                \
             --train_start ${TRAIN_START}                    \
             --train_end ${TRAIN_END}                        \
+            --test_start ${TEST_START}                      \
+            --test_end ${TEST_END}                          \
             --encoder simple-enc-mlp                        \
             --classifier simple-enc-mlp                     \
             --enc-hidden ${modeldim}                        \

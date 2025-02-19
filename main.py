@@ -21,6 +21,8 @@ from joblib import dump
 import utils
 from models import SimpleEncClassifier, MLPClassifier
 from train import train_encoder, train_classifier
+import warnings
+warnings.filterwarnings("ignore")
 
 def main():
     """
@@ -58,7 +60,8 @@ def main():
     all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
         
     train_families = set(all_train_family)
-    logging.info(f"Number of y_train_family = {y_train_family}")
+    logging.info(f"Number of y_train_family = {len(y_train_family)}")
+    logging.info(f"Count of y_train_family = {Count(y_train_family)}")
     logging.info(f'All train family = {all_train_family}')
 
     """
@@ -187,21 +190,22 @@ def main():
     # train the encoder model if it does not already exist.
     # train mlp encoder in the classifier training step
     if args.encoder in ['enc', 'simple-enc-mlp']:
-        #if args.retrain_first == True or not os.path.exists(ENC_MODEL_PATH):
-        s1 = time.time()
-        train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
-                            optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
-                            save_snapshot = args.snapshot)
-        e1 = time.time()
-        logging.info(f'Training Encoder model time: {(e1 - s1):.3f} seconds')
-        
-        logging.info('Saving the model...')
-        utils.save_model(encoder, optimizer, args, args.epochs, ENC_MODEL_PATH)
-        logging.info(f'Training Encoder model finished: {ENC_MODEL_PATH}')
-        # else:
-        #     logging.info('Loading the model...')
-        #     state_dict = torch.load(ENC_MODEL_PATH)
-        #     encoder.load_state_dict(state_dict['model'])
+        if not os.path.exists(ENC_MODEL_PATH): # or args.retrain_first == True
+            s1 = time.time()
+            train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
+                                optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
+                                save_snapshot = args.snapshot)
+            e1 = time.time()
+            logging.info(f'Training Encoder model time: {(e1 - s1):.3f} seconds')
+            
+            logging.info('Saving the model...')
+            utils.save_model(encoder, optimizer, args, args.epochs, ENC_MODEL_PATH)
+            logging.info(f'Training Encoder model finished: {ENC_MODEL_PATH}')
+
+        else:
+            logging.info('Loading the model...')
+            state_dict = torch.load(ENC_MODEL_PATH)
+            encoder.load_state_dict(state_dict['model'])
     elif args.encoder == 'mlp':
         train_classifier(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
                         optimizer, args.mlp_epochs, ENC_MODEL_PATH, \
@@ -255,32 +259,139 @@ def main():
     sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation.csv', 'w')
     sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
     sample_explanation.flush()
-    logging.info(f'Run complete.')
+    # logging.info(f'Run complete.')
+
 
     
     """
     Now the following of the code is for active learning and sample selection if needed
     """
 
+    start_date = dt.datetime.strptime(args.test_start, '%Y-%m')
+    end_date = dt.datetime.strptime(args.test_end, '%Y-%m')
+    cur_month = start_date
+    # the index mapping for the first training set
+
+    month_loop_cnt = 0
+    prev_train_size = X_train.shape[0]
+    cur_sample_indices = []
+
+    # active learning loop
+    while cur_month <= end_date:
+        """
+        Step (4): Prepare the test dataset. Load the feature vectors and labels.
+        """
+        cur_month_str = cur_month.strftime('%Y-%m')
+        logging.info(f'Loading {args.data} test dataset for the month {cur_month_str}')
+        X_test, y_test, y_test_family = data.load_range_dataset_w_benign(args.data, cur_month_str, cur_month_str)
+        # all_test_family has 'benign'
+        ben_test_len = X_test.shape[0] - y_test_family.shape[0]
+        y_ben_test_family = np.full(ben_test_len, 'benign')
+        all_test_family = np.concatenate((y_test_family, y_ben_test_family), axis=0)
+
+        test_families = set(all_test_family)
+        logging.info(f"Number of y_test_family = {len(y_test_family)}")
+        logging.info(f"Count of y_test_family = {Count(y_test_family)}")
+        logging.info(f'All test family = {all_test_family}')
+        counted_test_labels = Counter(y_test)
+        logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
+        logging.info(f'y_test labels: {np.unique(y_test)}')
+        logging.info(f'y_test: {Counter(y_test)}')
+
+        y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
+        
+        # compute the embedding once
+        # this could be used to retrain the classifier
+        X_test_tensor = torch.from_numpy(X_test).float()
+        if args.encoder != None:
+            if torch.cuda.is_available():
+                X_test_feat_tensor = encoder.cuda().encode(X_test_tensor.cuda())
+                X_test_encoded = X_test_feat_tensor.cpu().detach().numpy()
+            else:
+                X_test_encoded = encoder.encode(X_test_tensor).numpy()
+        
+        if args.cls_feat == 'encoded':
+            X_test_feat = X_test_encoded
+        else:
+            X_test_feat = X_test
+
+        # Only month_loop_cnt == 0 will we update the accum data with new month data
+        if args.accumulate_data == True and month_loop_cnt == 0:
+            if cur_month_str == '2013-01':
+                X_test_accum = X_test
+                y_test_accum = y_test
+                all_test_family_accum = all_test_family
+                X_test_accum_feat = X_test_feat # for the classifier
+            else:
+                X_test_accum = np.concatenate((X_test_accum, X_test), axis=0)
+                y_test_accum = np.concatenate((y_test_accum, y_test), axis=0)
+                all_test_family_accum = np.concatenate((all_test_family_accum, all_test_family), axis=0)
+                X_test_accum_feat = np.concatenate((X_test_accum_feat, X_test_feat), axis=0) # for the classifier
+        elif month_loop_cnt == 0:
+            X_test_accum = X_test
+            y_test_accum = y_test
+            all_test_family_accum = all_test_family
+            X_test_accum_feat = X_test_feat # for the classifier
+        
+        y_test_binary_accum = np.array([1 if item != 0 else 0 for item in y_test_accum])
+        
+        """
+        Evaluate the test performance.
+        """
+        logging.info(f'Testing on {cur_month_str}')
+        y_test_pred, neg_by_fam, family_to_idx = utils.eval_classifier(args, classifier, cur_month_str, X_test_feat, y_test_binary, all_test_family, train_families, \
+                        fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+        
+
+
+        if args.accumulate_data == True and month_loop_cnt == 0:
+            if cur_month_str == '2013-01':
+                y_test_pred_accum = y_test_pred
+            else:
+                y_test_pred_accum = np.concatenate((y_test_pred_accum, y_test_pred), axis=0)
+        elif month_loop_cnt == 0:
+            y_test_pred_accum = y_test_pred
+        
+
+
+        """
+        Step (5): Psuedo labeling and sample selection
+        """
+
+
+
+        """
+        Step (6): Expand or Update the training set.
+        """
+
+
+
+
+        """
+        Step (7): Train the classifier model.
+        """
+
+
+
+
+        """
+        
+        """
+
+
+
+
 
 
 
     """
-    active learning loop
-
+    
         uncertainty sampling
         
         implementation of coreset replay if we find it useful
 
-
         expanding the training set
 
-
-
-
- 
-    
-    
     """
     
     # finish writing the result file

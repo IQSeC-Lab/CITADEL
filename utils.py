@@ -31,11 +31,12 @@ def parse_args():
     #p.add_argument('--train', default=None, help='Train month. e.g., 2012-01')
     p.add_argument('--train_start', default=None, help='Train start month. e.g., 2012-01')
     p.add_argument('--train_end', default=None, help='Train end month. e.g., 2012-12')
-
-    '''
+    
     p.add_argument('--test_start', help='First test month.')
     p.add_argument('--test_end', help='Last test month.')
 
+    '''
+    
     p.add_argument('--ood', action='store_true', help='Use CAE OOD score to help sampling')
     p.add_argument('--local_pseudo_loss', action='store_true', help='Use local pseudo loss to select samples')
     p.add_argument('--reduce', type=str, choices=['none', 'max', 'mean'],
@@ -106,10 +107,14 @@ def parse_args():
                     help='Maximum margins of dissimilar samples when training contrastive autoencoder.')
     p.add_argument('--cls-feat', type=str, default='input', choices=['encoded', 'input'],
                    help='input features for the classifier.')
-    
+    p.add_argument('--retrain-first', action='store_true',
+                   help='Whether to retrain the first model.')
+
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
     p.add_argument('--eval_multi', action='store_true', help='evaluate multi-class prediction performance.')
     p.add_argument('--multi_class', action='store_true', help='train multi-class.')
+    p.add_argument('--accumulate_data', action='store_true', help='Whether to accumulate test data from previous month, excluding the selected test samples')
+    
 
     '''
     p.add_argument('--encoder-retrain', action='store_true',
