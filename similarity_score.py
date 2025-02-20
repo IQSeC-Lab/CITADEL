@@ -13,6 +13,8 @@ import data
 import utils
 from models import MLPClassifier, SimpleEncClassifier
 
+# Conformal Prediction Imports
+
 class Similarity:
     def __init__(self):
         pass
@@ -38,7 +40,7 @@ class Similarity:
         return np.exp(-lambda_factor * euclidean_distance)
     
     def euclidean_dist(self, A, B, lambda_factor=1.0):
-        """Compute EL2Norm similarity between vectors A and B."""
+        """Compute Euclidean similarity between vectors A and B."""
         # Compute pairwise Euclidean distances
         euclidean_distances = cdist(A, B, metric='euclidean')
         return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
@@ -111,7 +113,6 @@ class Similarity:
         result_matrix = torch.stack((majority_value, majority_count), dim=1)
         return result_matrix.numpy(), np.array(index_label_pairs)
         
-
 
 def load_data_and_model(args):
 
@@ -223,42 +224,3 @@ if __name__ == "__main__":
     """
     
     pesudo_labeling(args)
-
-    # Example usage
-    # train_feature = np.array([0.1, 0.2, 0.3, 0.4]) 
-    # test_feature = np.array([0.15, 0.25, 0.35, 0.45])
-    # similarity = Similarity()
-    # score = similarity.cosine(train_feature, test_feature)
-    # print(f"Similarity Score: {score}")
-
-
-    # Train and Test Resprentation Similiarity Score Calculation
-    # mlp_dims = [10, 32, 16, 3]  # Example: input=10, two hidden layers (32, 16), output=3
-    # model = MLPClassifier(mlp_dims)
-
-    # # Generate sample input matrices (10x10 tensors)
-    # train_input = torch.rand(10, 10)  # 10 samples, 10 features each
-    # test_input = torch.rand(10, 10)  # 10 samples, 10 features each
-
-    # # Extract features from the penultimate layer
-    # train_features = model.encode(train_input)#.detach().numpy()
-    # test_features = model.encode(test_input)#.detach().numpy()
-
-    # similarity = Similarity()
-
-    # topk_sim_weight, topk_sim_indices = similarity.topk_similar(5, test_features, train_features)
-
-    # print("Top K similar Weights: ", topk_sim_weight)
-    # print("Top K similar Indices: ", topk_sim_indices)
-
-    # feature_labels = torch.randint(0, 2, (10, 10))  # Generates 0 or 1 randomly
-
-    # pseudo_labels = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels, batch_size=10)
-
-    # print("Pesudo Labels: ", pseudo_labels)
-
-    # cosine_score = similarity.cosine(train_features, test_features)
-    # el2norm_score = similarity.el2norm(train_features, test_features, lambda_factor=0.5)
-
-    # print(f"Cosine-similarity Score: {cosine_score}")
-    # print(f"EL2Norm Score: {el2norm_score}")
