@@ -46,10 +46,14 @@ class Similarity:
         return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
     
     
-    def topk_similar(self, K, feature_matrix1, feature_matrix2):
+    def topk_similar(self, K, sm_fn, feature_matrix1, feature_matrix2):
         # compute cos similarity between each feature vector and feature bank ---> [B, N]
-            # sim_matrix = self.cosine(feature_matrix1, feature_matrix2) # Cosine Similarity
-            sim_matrix = self.euclidean_dist(feature_matrix1, feature_matrix2)
+
+            if sm_fn == 'cosine':
+                sim_matrix = self.cosine(feature_matrix1, feature_matrix2)
+            else:
+                sim_matrix = self.euclidean_dist(feature_matrix1, feature_matrix2)
+
             sim_weight, sim_indices = sim_matrix.topk(k=K, dim=-1)
             return sim_weight, sim_indices
             # [B, K]
@@ -121,19 +125,20 @@ def load_data_and_model(args):
     print(f'y_train shape: {y_train.shape}')
     print(f'y_train_family shape: {y_train_family.shape}')
 
-    X_test, _, _ = data.load_range_dataset_w_benign(args.data, args.test_start, args.test_end)
+    X_test, y_test, _ = data.load_range_dataset_w_benign(args.data, args.test_start, args.test_end)
     print(f'y_test shape: {X_test.shape}')
     # print(f'y_test shape: {y_test.shape}')
     # print(f'y_test_family shape: {y_test_family.shape}')
 
     # ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_.pth')
-    ENC_MODEL_PATH = "/home/ihossain/ISMAIL/SSL-malware/models/gen_apigraph_drebin/simple_enc_classifier_lr0.003_sgd_.pth"
+    ENC_MODEL_PATH = args.pretrined_model
     # only based on malicious training samples
     NUM_FEATURES = X_train.shape[1]
     NUM_CLASSES = len(np.unique(y_train))
 
     # convert y_train to y_train_binary
     y_train_binary = np.array([1 if item != 0 else 0 for item in y_train])
+    y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
     BIN_NUM_CLASSES = 2
 
 
@@ -148,11 +153,11 @@ def load_data_and_model(args):
     else:
         raise Exception(f'The encoder {args.encoder} is not supported yet.')
 
-    return encoder, X_train, y_train_binary, X_test, ENC_MODEL_PATH
+    return encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH
 
 def pesudo_labeling(args):
     print("Pseudo Labeling for Acutal Datasets started")
-    encoder, X_train, y_train_binary, X_test, ENC_MODEL_PATH  = load_data_and_model(args)
+    encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH  = load_data_and_model(args)
 
     print("Model loading started...")
     state_dict = torch.load(ENC_MODEL_PATH)
@@ -184,32 +189,40 @@ def pesudo_labeling(args):
     print("X_train_feat: ", X_train_feat[:1, :10])
     print("X_test_feat: ", X_test_feat[:1, :10])
 
-    # Train and Test Resprentation Similiarity Score Calculation
-    similarity = Similarity()
-    # Here, we are calculating the top K=5 similar indices
-    topk_sim_weight, topk_sim_indices = similarity.topk_similar(5, X_test_feat, X_train_feat)
-
-    # print("Top K similar Weights: ", topk_sim_weight)
-    print("Top K similar Indices: ", topk_sim_indices)
-
-    pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, \
-                                                   feature_labels=y_train_binary, batch_size=args.bsize)
-
-    print("Pesudo Labels shape: ", pseudo_labels.shape)
-    print("Topk_info shape: ", topk_info.shape)
-
-    print("Pseudo Labeling for Acutal Datasets ended")
-
-    # Concatenate the arrays along the second dimension (columns)
-    concatenated_array = np.concatenate((pseudo_labels, topk_info), axis=1)
+    #convert y_test_binary to numpy
+    y_test_labels = y_test_binary.reshape(-1, 1)
 
     # Convert the concatenated array to a DataFrame
-    column_names = ['Pseudo Label', 'Majority', 'Train Point 1', 'Train Point 2', 'Train Point 3', 'Train Point 4','Train Point 5']
+    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Train Point 1', 'Train Point 2', 'Train Point 3', 'Train Point 4','Train Point 5']
 
-    df = pd.DataFrame(concatenated_array, columns=column_names)
+    # Train and Test Resprentation Similiarity Score Calculation
+    similarity = Similarity()
+    for sm_fn in ['cosine', 'euclidean']:
+        # Here, we are calculating the top K=5 similar indices
+        topk_sim_weight, topk_sim_indices = similarity.topk_similar(5, sm_fn, X_test_feat, X_train_feat)
 
-    # Save the DataFrame to a CSV file
-    df.to_csv('/home/ihossain/ISMAIL/SSL-malware/pseudo_labels/pseudo_labels_output.csv', index=True, header=True)
+        # print("Top K similar Weights: ", topk_sim_weight)
+        print("Top K similar Indices: ", topk_sim_indices)
+
+        pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, \
+                                                    feature_labels=y_train_binary, batch_size=args.bsize)
+
+        print("Pesudo Labels shape: ", pseudo_labels.shape)
+        print("Topk_info shape: ", topk_info.shape)
+
+        print("Pseudo Labeling for Acutal Datasets ended")
+
+        print("Actual Labels shape: ", y_test_labels.shape)
+
+        # Concatenate the arrays along the second dimension (columns)
+        concatenated_array = np.concatenate((pseudo_labels, y_test_labels, topk_info), axis=1)
+
+        df = pd.DataFrame(concatenated_array, columns=column_names)
+        
+        #update the output path
+        args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{i}_{sm_fn}.csv'
+        # Save the DataFrame to a CSV file
+        df.to_csv(args.pseudo_output_path, index=True, header=True)
 
     print("Data saved to output.csv")
 
@@ -222,5 +235,10 @@ if __name__ == "__main__":
     """
     # Pseudo Labeling for Acutal Datasets
     """
+    project_path = '/home/ihossain/ISMAIL/SSL-malware'
+    model_parent_path = f'{project_path}/models/gen_apigraph_drebin/simple_enc_classifier_lr'
+    output_parent_path = f'{project_path}/pseudo_labels/pseudo_labels_output'
     
-    pesudo_labeling(args)
+    for i in range(0, 101, 5):
+        args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{i}.pth'
+        pesudo_labeling(args)
