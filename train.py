@@ -226,20 +226,20 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
         time1 = time.time()
         if pl_pretrain == False:
             loss = train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
-        else:
-            loss = pl_train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
+        # else:
+        #     loss = pl_train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
         time2 = time.time()
         logging.info('epoch {}, b {}, lr {}, loss {}, total time {:.2f}'.format(epoch, bsize, new_lr, loss, time2 - time1))
 
-        if epoch >= total_epochs - 10:
-            if save_best_loss == True:
-                if loss < best_loss:
-                    best_loss = loss
-                    logging.info(f'Saving the best loss {loss} model from epoch {epoch}...')
-                    save_model(encoder, optimizer, args, args.epochs, model_path)
+        # if epoch >= total_epochs - 10:
+        #     if save_best_loss == True:
+        #         if loss < best_loss:
+        #             best_loss = loss
+        #             logging.info(f'Saving the best loss {loss} model from epoch {epoch}...')
+        #             save_model(encoder, optimizer, args, args.epochs, model_path)
     
-        if save_snapshot == True and epoch % 50 == 0:
-            save_path = model_path.replace("e%s" % total_epochs, "e%d" % epoch)
+        if save_snapshot == True and epoch % 5 == 0:
+            save_path = model_path.replace("Epoch", str(epoch))
             logging.info(f'Saving the model from epoch {epoch} loss {loss} at {save_path}...')
             save_model(encoder, optimizer, args, args.epochs, save_path)
     return
