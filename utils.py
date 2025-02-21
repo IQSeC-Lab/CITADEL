@@ -26,7 +26,6 @@ def parse_args():
     p.add_argument('--bsize', default=1024, type=int, help='Number of images in each mini-batch')
 
 
-
     p.add_argument('--mdate', help='Encoder model date to use.')
     #p.add_argument('--train', default=None, help='Train month. e.g., 2012-01')
     p.add_argument('--train_start', default="2013-12", help='Train start month. e.g., 2012-01')
@@ -54,9 +53,9 @@ def parse_args():
                     help='The encoder model to get embeddings of the input.')
     p.add_argument('--enc-hidden', default="512-384-256-128", \
                 help='The hidden layers of the encoder, example: "512-128-32"')
-    p.add_argument('--learning_rate', default=0.01, type=float,
+    p.add_argument('--learning_rate', default=0.003, type=float,
                    help='Overall learning rate.')
-    p.add_argument('--optimizer', default='adam', type=str, choices=['adam', 'sgd'],
+    p.add_argument('--optimizer', default='sgd', type=str, choices=['adam', 'sgd'],
                         help='Choosing an optimzer')
     p.add_argument('--epochs', default=250, type=int,
                    help='Training epochs.')
@@ -113,6 +112,8 @@ def parse_args():
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
     p.add_argument('--eval_multi', action='store_true', help='evaluate multi-class prediction performance.')
     p.add_argument('--multi_class', action='store_true', help='train multi-class.')
+    p.add_argument('--pretrined_model', type=str, default='', help='pretrained model path.')
+    p.add_argument('--pseudo_output_path', type=str, default='', help='pseudo output path.')
 
     '''
     p.add_argument('--encoder-retrain', action='store_true',
@@ -183,7 +184,7 @@ def parse_args():
     p.add_argument('--epochs', default=500, type=int, help='Number of sweeps over the dataset to train')
     
     '''
-    p.add_argument('--log_path', type=str, help='log file name.')
+    p.add_argument('--log_path', type=str, default='/home/ihossain/ISMAIL/SSL-malware/pseudo_labels/pseudo_labels.log', help='log file name.')
 
     args = p.parse_args()
 
