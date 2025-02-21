@@ -190,7 +190,7 @@ def pesudo_labeling(args, ckpt_index):
 
             df = pd.DataFrame(concatenated_array, columns=tot_columns)
 
-            args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{ckpt_index}_{sm_fn}_{k}.csv'
+            args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{ckpt_index}_{sm_fn}_{k}_{args.test_start}.csv'
             df.to_csv(args.pseudo_output_path, index=True, header=True)
 
     logging.info("Data saved to output.csv")
@@ -211,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument('--learning_rate', type=float, required=True, help='Learning rate')
     parser.add_argument('--optimizer', type=str, required=True, help='Optimizer type')
     parser.add_argument('--epochs', type=int, required=True, help='Number of epochs')
+    parser.add_argument('--result_epochs', type=int, required=True, help='Number of epochs after to show results')
     parser.add_argument('--k_closest', type=int, required=True, help='Number of Closest Points')
     parser.add_argument('--loss_func', type=str, required=True, help='Loss function')
     parser.add_argument('--cls_feat', type=str, required=True, help='Loss function')
@@ -232,7 +233,7 @@ if __name__ == "__main__":
         args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{args.epochs}.pth'
         pesudo_labeling(args, args.epochs)
     else:
-        for i in range(0, args.epochs+1, 5):
+        for i in range(0, args.epochs+1, args.result_epochs):
             logging.info("----------------[Epoch: %s]---------------------", i)
             args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{i}.pth'
             pesudo_labeling(args, i)
