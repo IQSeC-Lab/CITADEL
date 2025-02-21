@@ -8,6 +8,7 @@ from joblib import Parallel, delayed
 import pandas as pd
 from scipy.spatial.distance import cdist
 import logging
+import argparse
 
 # local imports
 import data
@@ -128,12 +129,12 @@ def load_data_and_model(args):
 
     return encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH
 
-def pesudo_labeling(args):
+def pesudo_labeling(args, ckpt_index):
     logging.info("Pseudo Labeling for Acutal Datasets started")
     encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH = load_data_and_model(args)
 
     logging.info("Model loading started...")
-    state_dict = torch.load(ENC_MODEL_PATH)
+    state_dict = torch.load(ENC_MODEL_PATH, weights_only=False)
     encoder.load_state_dict(state_dict['model'])
     logging.info("Model loading ended!")
 
@@ -160,34 +161,62 @@ def pesudo_labeling(args):
 
     y_test_labels = y_test_binary.reshape(-1, 1)
 
-    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Train Point 1', 'Train Point 2', 'Train Point 3', 'Train Point 4', 'Train Point 5']
+    column_names = ['Pseudo Label', 'Majority', 'Actual Label']
 
     similarity = Similarity()
-    for sm_fn in ['cosine', 'euclidean']:
-        topk_sim_weight, topk_sim_indices = similarity.topk_similar(5, sm_fn, X_test_feat, X_train_feat)
+    for k in range(1, args.k_closest, 2):
+        temp_cols = []
+        for c in range(1, k+1):
+            temp_cols.append(f'Train Point {c}')
+        tot_columns = column_names + temp_cols
+        logging.info("Total logging.infoColumns: %s", tot_columns)
+        
+        for sm_fn in ['cosine', 'euclidean']:
+            topk_sim_weight, topk_sim_indices = similarity.topk_similar(k, sm_fn, X_test_feat, X_train_feat)
 
-        logging.info("Top K similar Indices: %s", topk_sim_indices)
+            logging.info("Top K similar Indices: %s", topk_sim_indices)
 
-        pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels=y_train_binary, batch_size=args.bsize)
+            pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels=y_train_binary, batch_size=args.bsize)
 
-        logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
-        logging.info("Topk_info shape: %s", topk_info.shape)
+            logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
+            logging.info("Topk_info shape: %s", topk_info.shape)
 
-        logging.info("Pseudo Labeling for Acutal Datasets ended")
+            logging.info("Pseudo Labeling for Acutal Datasets ended")
 
-        logging.info("Actual Labels shape: %s", y_test_labels.shape)
+            logging.info("Actual Labels shape: %s", y_test_labels.shape)
 
-        concatenated_array = np.concatenate((pseudo_labels, y_test_labels, topk_info), axis=1)
+            concatenated_array = np.concatenate((pseudo_labels, y_test_labels, topk_info), axis=1)
+            logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
-        df = pd.DataFrame(concatenated_array, columns=column_names)
+            df = pd.DataFrame(concatenated_array, columns=tot_columns)
 
-        args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{i}_{sm_fn}.csv'
-        df.to_csv(args.pseudo_output_path, index=True, header=True)
+            args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{ckpt_index}_{sm_fn}_{k}.csv'
+            df.to_csv(args.pseudo_output_path, index=True, header=True)
 
     logging.info("Data saved to output.csv")
 
 if __name__ == "__main__":
-    args = utils.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data', type=str, required=True, help='Path to the data')
+    # parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--bsize', type=int, required=True, help='Batch size')
+    parser.add_argument('--mdate', type=str, required=True, help='Model date')
+    parser.add_argument('--train_start', type=str, required=True, help='Training start date')
+    parser.add_argument('--train_end', type=str, required=True, help='Training end date')
+    parser.add_argument('--test_start', type=str, required=True, help='Test start date')
+    parser.add_argument('--test_end', type=str, required=True, help='Test end date')
+    parser.add_argument('--encoder', type=str, required=True, help='Encoder type')
+    parser.add_argument('--enc_hidden', type=str, required=True, help='Encoder hidden layers')
+    parser.add_argument('--mlp_hidden', type=str, required=True, help='Encoder hidden layers')
+    parser.add_argument('--learning_rate', type=float, required=True, help='Learning rate')
+    parser.add_argument('--optimizer', type=str, required=True, help='Optimizer type')
+    parser.add_argument('--epochs', type=int, required=True, help='Number of epochs')
+    parser.add_argument('--k_closest', type=int, required=True, help='Number of Closest Points')
+    parser.add_argument('--loss_func', type=str, required=True, help='Loss function')
+    parser.add_argument('--cls_feat', type=str, required=True, help='Loss function')
+    parser.add_argument('--log_path', type=str, required=True, help='Path to the log file')
+    parser.add_argument('--single_checkpoint', required=True, help='Use single checkpoints')
+    args = parser.parse_args()
 
     log_file_path = args.log_path
     logging.basicConfig(filename=log_file_path, filemode='a',
@@ -198,6 +227,12 @@ if __name__ == "__main__":
     model_parent_path = f'{project_path}/models/gen_apigraph_drebin/simple_enc_classifier_lr'
     output_parent_path = f'{project_path}/pseudo_labels/csv/pseudo_labels_output'
     
-    for i in range(0, 5, 5):
-        args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{i}.pth'
-        pesudo_labeling(args)
+    if args.single_checkpoint:
+        logging.info("----------------[Single Check Point]---------------------", )
+        args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{args.epochs}.pth'
+        pesudo_labeling(args, args.epochs)
+    else:
+        for i in range(0, args.epochs+1, 5):
+            logging.info("----------------[Epoch: %s]---------------------", i)
+            args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{i}.pth'
+            pesudo_labeling(args, i)
