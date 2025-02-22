@@ -48,15 +48,22 @@ class Similarity:
         euclidean_distances = cdist(A, B, metric='euclidean')
         return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
     
+
+    
     def topk_similar(self, K, sm_fn, feature_matrix1, feature_matrix2):
-        # compute cos similarity between each feature vector and feature bank ---> [B, N]
+        # compute cos similarity between each feature vector
         if sm_fn == 'cosine':
             sim_matrix = self.cosine(feature_matrix1, feature_matrix2)
         else:
             sim_matrix = self.euclidean_dist(feature_matrix1, feature_matrix2)
 
         sim_weight, sim_indices = sim_matrix.topk(k=K, dim=-1)
-        return sim_weight, sim_indices
+
+        # Calculate the minimum and average values of the top K similarities
+        min_sim = sim_weight.min(dim=-1).values
+        avg_sim = sim_weight.mean(dim=-1)
+
+        return sim_weight, sim_indices, min_sim, avg_sim
 
     def get_majority_label(self, sim_score, sim_indices, feature_labels, batch_size):
         # Convert NumPy arrays to PyTorch tensors if necessary
@@ -161,7 +168,7 @@ def pesudo_labeling(args, ckpt_index):
 
     y_test_labels = y_test_binary.reshape(-1, 1)
 
-    column_names = ['Pseudo Label', 'Majority', 'Actual Label']
+    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Min_value', 'Avg_value']
 
     similarity = Similarity()
     for k in range(1, args.k_closest, 2):
@@ -172,7 +179,7 @@ def pesudo_labeling(args, ckpt_index):
         logging.info("Total logging.infoColumns: %s", tot_columns)
         
         for sm_fn in ['cosine', 'euclidean']:
-            topk_sim_weight, topk_sim_indices = similarity.topk_similar(k, sm_fn, X_test_feat, X_train_feat)
+            topk_sim_weight, topk_sim_indices, min_sim, avg_sim = similarity.topk_similar(k, sm_fn, X_test_feat, X_train_feat)
 
             logging.info("Top K similar Indices: %s", topk_sim_indices)
 
@@ -185,7 +192,10 @@ def pesudo_labeling(args, ckpt_index):
 
             logging.info("Actual Labels shape: %s", y_test_labels.shape)
 
-            concatenated_array = np.concatenate((pseudo_labels, y_test_labels, topk_info), axis=1)
+            min_sim = min_sim.numpy().reshape(-1, 1)
+            avg_sim = avg_sim.numpy().reshape(-1, 1)
+
+            concatenated_array = np.concatenate((pseudo_labels, min_sim, avg_sim, y_test_labels, topk_info), axis=1)
             logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
             df = pd.DataFrame(concatenated_array, columns=tot_columns)
