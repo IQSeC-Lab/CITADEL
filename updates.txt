@@ -1,0 +1,19 @@
+Date: 01/25/2025:
+-----------------
+
+1. Generating the result for different K values for a single month of given year
+     - result is being stored based on distance/similarity function
+     - month wise and in accordance to the value of K 
+2. Completed writing code for FNR calculation
+     - Comparing the pseudo labels with actual labels
+     - FNR is shown in the bar plot for single month for different similarity metrices 
+3. Code is written for generating bar plots for 12 months of given year
+
+4. Added two columns into result CSV file to have the result of Min similarity and Average similarity
+
+
+Plan for Next:
+--------------
+1. Working on Active learning part
+2. Data selection process based on similarity scores either Min value or Average
+3. Selected data points will be sent to further training
