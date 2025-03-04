@@ -117,7 +117,7 @@ def parse_args():
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
     p.add_argument('--eval_multi', action='store_true', help='evaluate multi-class prediction performance.')
     p.add_argument('--multi_class', action='store_true', help='train multi-class.')
-    p.add_argument('--pretrined_model', type=str, default='', help='pretrained model path.')
+    p.add_argument('--pretrined_model', type=str, default='False', help='pretrained model path.')
     p.add_argument('--pseudo_output_path', type=str, default='', help='pseudo output path.')
 
 

@@ -5,20 +5,24 @@ LR=0.003
 OPT=sgd
 SCH=step
 DECAY=0.95
-EPOCHS=5
-RESULT_EPOCHS=2
+EPOCHS=250
+RESULT_EPOCHS=50
 WLR=0.00015
 WE=100
 # DATA=/home/ihossain/ISMAIL/Datasets/data/gen_androzoo_drebin
 DATA=/home/ihossain/ISMAIL/Datasets/data/gen_apigraph_drebin
 TRAIN_START=2012-01
 TRAIN_END=2012-12
+
 VALID_START=2013-01
 VALID_END=2013-01
-TEST_START=2013-07
-TEST_END=2013-07
+
+TEST_START=2018-01
+TEST_END=2018-01
+
 RESULT_DIR=/home/ihossain/ISMAIL/SSL-malware/results_ours
 AL_OPT=adam
+PRE=True
 
 CNT=200
 
@@ -42,6 +46,7 @@ python -u main.py	                                \
             --cls_feat input                                 \
             --encoder simple-enc-mlp                        \
             --classifier simple-enc-mlp                     \
+            --pretrined_model ${PRE}                        \
             --loss_func ${LOSS}                             \
             --enc-hidden ${modeldim}                        \
             --mlp-hidden 100-100                            \

@@ -36,100 +36,10 @@ def load_data(data_dir, start_month, end_month):
 
     return X, y, all_family
 
-def main():
-    """
-    Step (0): Init log path and parse args.
-    """
-    args = utils.parse_args()
+def prepare_encoder_and_classifier(
+        args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
+            NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir):
 
-    log_file_path = args.log_path
-    
-    if args.verbose == False:
-        logging.basicConfig(filename=log_file_path,filemode='a',
-                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                            level=logging.INFO)
-    else:
-        logging.basicConfig(filename=log_file_path, filemode='a',
-                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                            level=logging.DEBUG)
-    logging.info('Running with configuration:\n' + pformat(vars(args)))
-
-
-    """
-    Step (1): Prepare the training dataset. Load the feature vectors and labels.
-    """
-    data_dir = args.data.split('/')[-1]
-    logging.info(f'Dataset directory name {data_dir}')
-
-    logging.info(f'Loading {args.data} training dataset')
-    logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
-    logging.info(f'For Androzoo dataset start with the month 2019-01to2019-12_selected.')
-    
-    X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
-    # all_train_family has 'benign'
-    ben_len = X_train.shape[0] - y_train_family.shape[0]
-    y_ben_family = np.full(ben_len, 'benign')
-    all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
-        
-    train_families = set(all_train_family)
-    logging.info(f"Number of y_train_family = {y_train_family}")
-    logging.info(f'All train family = {all_train_family}')
-
-    """
-    if args.data.startswith('tesseract') or \
-        args.data.startswith('gen_tesseract') or \
-        args.data.startswith('fam_tesseract') or \
-        args.data.startswith('emberv2'):
-        X_train, y_train, all_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
-    else:
-        logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
-        logging.info(f'For Androzoo dataset start with the month 2019-01to2019-12_selected.')
-        
-        X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
-        # all_train_family has 'benign'
-        ben_len = X_train.shape[0] - y_train_family.shape[0]
-        y_ben_family = np.full(ben_len, 'benign')
-        all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
-            
-    train_families = set(all_train_family)
-    """
-    # count label distribution
-    counted_labels = Counter(y_train)
-    logging.info(f'Loaded X_train: {X_train.shape}, {y_train.shape}')
-    logging.info(f'y_train labels: {np.unique(y_train)}')
-    logging.info(f'y_train: {Counter(y_train)}')
-
-    # the index mapping for the first training set
-    new_y_mapping = {}
-    for _, label in enumerate(np.unique(y_train)):
-        new_y_mapping[label] = label
-    
-    """
-    Step (2): Variable names and file names.
-    """
-    # some commonly used variables.
-    if args.train_start != args.train_end:
-        train_dataset_name = f'{args.train_start}to{args.train_end}'
-    else:
-        train_dataset_name = f'{args.train_start}'
-
-    SAVED_MODEL_FOLDER = "/home/ihossain/ISMAIL/SSL-malware/models/"
-    # only based on malicious training samples
-    NUM_FEATURES = X_train.shape[1]
-    NUM_CLASSES = len(np.unique(y_train))
-
-    logging.info(f'Number of features: {NUM_FEATURES}; Number of classes: {NUM_CLASSES}')
-
-    # convert y_train to y_train_binary
-    y_train_binary = np.array([1 if item != 0 else 0 for item in y_train])
-    BIN_NUM_CLASSES = 2
-
-
-    """
-    Step (3): Train the encoder model.
-    `encoder` needs to have the same APIs.
-    If they don't have the required API, we could use a wrapper.
-    """
     cls_gpu = True
     if args.encoder == None:
         # We will not use an encoder. The input features are used directly.
@@ -224,6 +134,221 @@ def main():
         utils.save_model(encoder, optimizer, args, args.epochs, ENC_MODEL_PATH)
         logging.info(f'Training Encoder model finished: {ENC_MODEL_PATH}')
 
+    if args.classifier in ['simple-enc-mlp'] or args.classifier == args.encoder:
+        # we have already trained it as the sample selection model.
+        classifier = encoder
+        CLS_MODEL_PATH = ENC_MODEL_PATH
+        cls_gpu = True
+    elif args.classifier == 'mlp':
+        if args.encoder == 'mlp':
+            classifier = encoder
+            CLS_MODEL_PATH = ENC_MODEL_PATH
+        else:
+            raise Exception(f'Different classifier and encoder is not implemented yet')
+        cls_gpu = True
+
+    return cls_gpu, encoder, classifier, X_train_final, \
+         y_train_binary_final, ENC_MODEL_PATH 
+
+def main():
+    """
+    Step (0): Init log path and parse args.
+    """
+    args = utils.parse_args()
+
+    log_file_path = args.log_path
+    
+    if args.verbose == False:
+        logging.basicConfig(filename=log_file_path,filemode='a',
+                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                            level=logging.INFO)
+    else:
+        logging.basicConfig(filename=log_file_path, filemode='a',
+                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                            level=logging.DEBUG)
+    logging.info('Running with configuration:\n' + pformat(vars(args)))
+
+
+    """
+    Step (1): Prepare the training dataset. Load the feature vectors and labels.
+    """
+    data_dir = args.data.split('/')[-1]
+    logging.info(f'Dataset directory name {data_dir}')
+
+    logging.info(f'Loading {args.data} training dataset')
+    logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
+    logging.info(f'For Androzoo dataset start with the month 2019-01to2019-12_selected.')
+    
+    X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
+    # all_train_family has 'benign'
+    ben_len = X_train.shape[0] - y_train_family.shape[0]
+    y_ben_family = np.full(ben_len, 'benign')
+    all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
+        
+    train_families = set(all_train_family)
+    logging.info(f"Number of y_train_family = {y_train_family}")
+    logging.info(f'All train family = {all_train_family}')
+
+    """
+    if args.data.startswith('tesseract') or \
+        args.data.startswith('gen_tesseract') or \
+        args.data.startswith('fam_tesseract') or \
+        args.data.startswith('emberv2'):
+        X_train, y_train, all_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
+    else:
+        logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
+        logging.info(f'For Androzoo dataset start with the month 2019-01to2019-12_selected.')
+        
+        X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
+        # all_train_family has 'benign'
+        ben_len = X_train.shape[0] - y_train_family.shape[0]
+        y_ben_family = np.full(ben_len, 'benign')
+        all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
+            
+    train_families = set(all_train_family)
+    """
+    # count label distribution
+    counted_labels = Counter(y_train)
+    logging.info(f'Loaded X_train: {X_train.shape}, {y_train.shape}')
+    logging.info(f'y_train labels: {np.unique(y_train)}')
+    logging.info(f'y_train: {Counter(y_train)}')
+
+    # the index mapping for the first training set
+    new_y_mapping = {}
+    for _, label in enumerate(np.unique(y_train)):
+        new_y_mapping[label] = label
+    
+    """
+    Step (2): Variable names and file names.
+    """
+    # some commonly used variables.
+    if args.train_start != args.train_end:
+        train_dataset_name = f'{args.train_start}to{args.train_end}'
+    else:
+        train_dataset_name = f'{args.train_start}'
+
+    SAVED_MODEL_FOLDER = "/home/ihossain/ISMAIL/SSL-malware/models/"
+    # only based on malicious training samples
+    NUM_FEATURES = X_train.shape[1]
+    NUM_CLASSES = len(np.unique(y_train))
+
+    logging.info(f'Number of features: {NUM_FEATURES}; Number of classes: {NUM_CLASSES}')
+
+    # convert y_train to y_train_binary
+    y_train_binary = np.array([1 if item != 0 else 0 for item in y_train])
+    BIN_NUM_CLASSES = 2
+
+
+    """
+    Step (3): Train the encoder model.
+    `encoder` needs to have the same APIs.
+    If they don't have the required API, we could use a wrapper.
+    """
+    logging.info(f'Pretrained model: {args.pretrined_model}')
+    if args.pretrined_model == 'False':
+        cls_gpu, encoder, classifier, X_train_final, \
+            y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
+            args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
+                NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir)
+        
+
+        # Tranin data evaluation
+        fout = open(args.result.split('.csv')[0]+'_train.csv', 'w')
+        fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
+        fam_out = open(args.result.split('.csv')[0]+'_family_train.csv', 'w')
+        fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+        stat_out = open(args.result.split('.csv')[0]+'_stat_train.csv', 'w')
+        stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+        utils.eval_classifier(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
+                               all_train_family, train_families, \
+                                fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+
+        # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
+        # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
+        # sample_out.flush()
+        # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_train.csv', 'w')
+        # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
+        # sample_explanation.flush()
+
+        #--------------------------------------------------------------------------------------------------
+        """
+        Step (4): Prepare the validation dataset. Load the feature vectors and labels.
+        """
+        # Validation data evaluation
+        fout = open(args.result.split('.csv')[0]+'_valid.csv', 'w')
+        fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
+        fam_out = open(args.result.split('.csv')[0]+'_family_valid.csv', 'w')
+        fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+        stat_out = open(args.result.split('.csv')[0]+'_stat_valid.csv', 'w')
+        stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+
+        for i in range(1, 7):
+            args.valid_start = args.valid_end
+            args.valid_start = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+            args.valid_end = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+        
+            # logging.info(f'Loading {args.data} validation dataset form {args.valid_start} to {args.valid_end}')
+            
+            X_valid, y_valid, all_valid_family = load_data(args.data, args.valid_start, args.valid_end)
+                
+            valid_families = set(all_valid_family)
+            # logging.info(f"Number of y_valid_family = {y_valid_family}")
+            logging.info(f'All valid family = {all_valid_family}')
+
+            # count label distribution
+            counted_labels_valid = Counter(y_valid)
+            logging.info(f'Loaded X_valid: {X_valid.shape}, {y_valid.shape}')
+            logging.info(f'y_valid labels: {np.unique(y_valid)}')
+            logging.info(f'y_valid: {Counter(y_valid)}')
+
+            # convert y_valid to y_valid_binary
+            y_valid_binary = np.array([1 if item != 0 else 0 for item in y_valid])
+
+            # prepare X_feat and X_feat_tensor if they are embeddings
+            if args.cls_feat == 'encoded':
+                X_valid_tensor = torch.from_numpy(X_valid).float()
+                if torch.cuda.is_available():
+                    X_valid_tensor = X_valid_tensor.cuda()
+                    X_feat_tensor_valid = encoder.cuda().encode(X_valid_tensor)
+                    X_valid_feat = X_feat_tensor_valid.cpu().detach().numpy()
+                else:
+                    X_valid_feat = encoder.encode(X_valid_tensor).numpy()
+            else:
+                # args.cls_feat == 'input'
+                X_valid_feat = X_valid
+
+            utils.eval_classifier(args, classifier, args.valid_end, X_valid_feat, y_valid_binary, all_valid_family, valid_families, \
+                            fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+        
+        # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
+        # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
+        # sample_out.flush()
+        # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_valid.csv', 'w')
+        # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
+        # sample_explanation.flush()
+        #--------------------------------------------------------------------------------------------------
+
+        logging.info(f'Run complete for Train and Validation.')
+
+    else:
+        MODEL_DIR = os.path.join(SAVED_MODEL_FOLDER, data_dir)
+        encoder_name = 'simple_enc_classifier'
+        ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_Final.pth')
+        logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
+
+        if args.encoder == 'simple-enc-mlp':
+            enc_dims = utils.get_model_dims('Encoder', NUM_FEATURES, args.enc_hidden, NUM_CLASSES)
+            mlp_dims = utils.get_model_dims('MLP', enc_dims[-1], args.mlp_hidden, BIN_NUM_CLASSES)
+            encoder = SimpleEncClassifier(enc_dims, mlp_dims)
+        # load the pre-trained encoder model
+        logging.info("Model loading started...")
+        state_dict = torch.load(ENC_MODEL_PATH, weights_only=False)
+        
+        encoder.load_state_dict(state_dict['model'])
+        classifier = encoder
+        cls_gpu = True
+        logging.info("Model loading ended!")
+
     """
     Select the classifier model.
     """
@@ -239,126 +364,7 @@ def main():
     else:
         # args.cls_feat == 'input'
         X_train_feat = X_train
-
-    if args.classifier in ['simple-enc-mlp'] or args.classifier == args.encoder:
-        # we have already trained it as the sample selection model.
-        classifier = encoder
-        CLS_MODEL_PATH = ENC_MODEL_PATH
-        cls_gpu = True
-    elif args.classifier == 'mlp':
-        if args.encoder == 'mlp':
-            classifier = encoder
-            CLS_MODEL_PATH = ENC_MODEL_PATH
-        else:
-            raise Exception(f'Different classifier and encoder is not implemented yet')
-        cls_gpu = True
-    # saving the results
-
-    # Tranin data evaluation
-    fout = open(args.result.split('.csv')[0]+'_train.csv', 'w')
-    fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0]+'_family_train.csv', 'w')
-    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0]+'_stat_train.csv', 'w')
-    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
-    utils.eval_classifier(args, classifier, args.train_end, X_train_final, y_train_binary_final, all_train_family, train_families, \
-                    fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
-
-    # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
-    # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
-    # sample_out.flush()
-    # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_train.csv', 'w')
-    # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
-    # sample_explanation.flush()
-    #--------------------------------------------------------------------------------------------------
-    """
-    Step (4): Prepare the validation dataset. Load the feature vectors and labels.
-    """
-    # Validation data evaluation
-    fout = open(args.result.split('.csv')[0]+'_valid.csv', 'w')
-    fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0]+'_family_valid.csv', 'w')
-    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0]+'_stat_valid.csv', 'w')
-    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
-
-    for i in range(1, 7):
-        args.valid_start = args.valid_end
-        args.valid_start = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
-        args.valid_end = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
-     
-        logging.info(f'Loading {args.data} validation dataset form {args.valid_start} to {args.valid_end}')
-        
-        X_valid, y_valid, all_valid_family = load_data(args.data, args.valid_start, args.valid_end)
-            
-        valid_families = set(all_valid_family)
-        # logging.info(f"Number of y_valid_family = {y_valid_family}")
-        logging.info(f'All valid family = {all_valid_family}')
-
-        # count label distribution
-        counted_labels_valid = Counter(y_valid)
-        logging.info(f'Loaded X_valid: {X_valid.shape}, {y_valid.shape}')
-        logging.info(f'y_valid labels: {np.unique(y_valid)}')
-        logging.info(f'y_valid: {Counter(y_valid)}')
-
-        # convert y_valid to y_valid_binary
-        y_valid_binary = np.array([1 if item != 0 else 0 for item in y_valid])
-
-        # prepare X_feat and X_feat_tensor if they are embeddings
-        if args.cls_feat == 'encoded':
-            X_valid_tensor = torch.from_numpy(X_valid).float()
-            if torch.cuda.is_available():
-                X_valid_tensor = X_valid_tensor.cuda()
-                X_feat_tensor_valid = encoder.cuda().encode(X_valid_tensor)
-                X_valid_feat = X_feat_tensor_valid.cpu().detach().numpy()
-            else:
-                X_valid_feat = encoder.encode(X_valid_tensor).numpy()
-        else:
-            # args.cls_feat == 'input'
-            X_valid_feat = X_valid
-
-        utils.eval_classifier(args, classifier, args.valid_end, X_valid_feat, y_valid_binary, all_valid_family, valid_families, \
-                        fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
     
-    # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
-    # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
-    # sample_out.flush()
-    # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_valid.csv', 'w')
-    # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
-    # sample_explanation.flush()
-    #--------------------------------------------------------------------------------------------------
-
-    logging.info(f'Run complete for Train and Validation.')
-
-    logging.info(f'Loading {args.data} Test dataset form {args.test_end} to {args.test_end}')
-        
-    X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
-        
-    test_families = set(all_test_family)
-    # logging.info(f"Number of y_valid_family = {y_valid_family}")
-    logging.info(f'All test family = {all_test_family}')
-
-    # count label distribution
-    counted_labels_valid = Counter(y_test)
-    logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
-    logging.info(f'y_test labels: {np.unique(y_test)}')
-    logging.info(f'y_test: {Counter(y_test)}')
-
-    # convert y_valid to y_valid_binary
-    y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
-
-    # prepare X_feat and X_feat_tensor if they are embeddings
-    if args.cls_feat == 'encoded':
-        X_test_tensor = torch.from_numpy(X_test).float()
-        if torch.cuda.is_available():
-            X_test_tensor = X_test_tensor.cuda()
-            X_feat_tensor_test = encoder.cuda().encode(X_test_tensor)
-            X_test_feat = X_feat_tensor_test.cpu().detach().numpy()
-        else:
-            X_test_feat = encoder.encode(X_test_tensor).numpy()
-    else:
-        # args.cls_feat == 'input'
-        X_test_feat = X_test
 
     # Test data evaluation
     fout = open(args.result.split('.csv')[0]+'_test.csv', 'w')
@@ -367,8 +373,45 @@ def main():
     fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
     stat_out = open(args.result.split('.csv')[0]+'_stat_test.csv', 'w')
     stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
-    utils.eval_classifier(args, classifier, args.test_end, X_test_feat, y_test_binary, all_test_family, test_families, \
-                    fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+
+    for i in range(1, 13):
+        # args.test_start = args.test_end
+        test_start = (dt.datetime.strptime(args.test_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
+        test_end = (dt.datetime.strptime(args.test_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
+     
+        logging.info(f'Loading {args.data} Test dataset form {test_start} to {test_end}')
+            
+        X_test, y_test, all_test_family = load_data(args.data, test_start, test_end)
+            
+        test_families = set(all_test_family)
+        # logging.info(f"Number of y_valid_family = {y_valid_family}")
+        logging.info(f'All test family = {all_test_family}')
+
+        # count label distribution
+        counted_labels_valid = Counter(y_test)
+        logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
+        logging.info(f'y_test labels: {np.unique(y_test)}')
+        logging.info(f'y_test: {Counter(y_test)}')
+
+        # convert y_valid to y_valid_binary
+        y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
+
+        # prepare X_feat and X_feat_tensor if they are embeddings
+        if args.cls_feat == 'encoded':
+            X_test_tensor = torch.from_numpy(X_test).float()
+            if torch.cuda.is_available():
+                X_test_tensor = X_test_tensor.cuda()
+                X_feat_tensor_test = encoder.cuda().encode(X_test_tensor)
+                X_test_feat = X_feat_tensor_test.cpu().detach().numpy()
+            else:
+                X_test_feat = encoder.encode(X_test_tensor).numpy()
+        else:
+            # args.cls_feat == 'input'
+            X_test_feat = X_test
+           
+        # args.test_end = test_end
+        utils.eval_classifier(args, classifier, test_end, X_test_feat, y_test_binary, all_test_family, test_families, \
+                        fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
 
     logging.info(f'Run complete for Test.')
     #--------------------------------------------------------------------------------------------------
@@ -376,18 +419,32 @@ def main():
     """
     Now the following of the code is for pseudo-labeling and sample selection if needed
     """
-    logging.info(f'Pseudo labeling for Test data Started.....')
+    # logging.info(f'Pseudo labeling for Test data Started.....')
 
-    y_test_binary = y_test_binary.reshape(-1, 1)
-    df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
-                    X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
-                        X_test_feat=X_test_feat, y_test_binary=y_test_binary)
+    # y_test_labels = y_test_binary.reshape(-1, 1)
+    # df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+    #                 X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+    #                     X_test_feat=X_test_feat, y_test_binary=y_test_labels)
 
-    logging.info(f'Test data pseudo label info: {df.head(10)}')
+    # logging.info(f'Test data pseudo label info: {df.head(10)}')
+    # logging.info(f'Pseudo labeling for Test data Ended.')
+    # logging.info(f'Sample selection Started.....')
 
-    logging.info(f'Pseudo labeling for Test data Ended.')
+    # # Sort the dataframe based on 'Min_similarity' column and select the first 200 rows
+    # df_sorted['original_index'] = df.index
+    # df_sorted = df.sort_values(by='Min_value').head(200)
+    # logging.info(f'Selected top 200 samples based on minimum similarity:\n{df_sorted.head(10)}')
+    # selected_indices = df_sorted['original_index'].values
+    # selected_X_test_feat = X_test_feat[selected_indices]
+    # selected_y_test_binary = y_test_binary[selected_indices]
+    # logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
 
-    
+    # # Merge the selected test samples with the training data
+    # X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
+    # y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
+    # logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
+    # logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
+
 
     #--------------------------------------------------------------------------------------------------
     
