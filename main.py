@@ -21,7 +21,8 @@ from joblib import dump
 import utils
 from models import SimpleEncClassifier, MLPClassifier
 from train import train_encoder, train_classifier
-import similarity_score
+
+from similarity_score import pesudo_labeling
 
 def load_data(data_dir, start_month, end_month):
     """
@@ -325,22 +326,74 @@ def main():
     # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_valid.csv', 'w')
     # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
     # sample_explanation.flush()
- 
     #--------------------------------------------------------------------------------------------------
 
-    logging.info(f'Run complete.')
+    logging.info(f'Run complete for Train and Validation.')
+
+    logging.info(f'Loading {args.data} Test dataset form {args.test_end} to {args.test_end}')
+        
+    X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
+        
+    test_families = set(all_test_family)
+    # logging.info(f"Number of y_valid_family = {y_valid_family}")
+    logging.info(f'All test family = {all_test_family}')
+
+    # count label distribution
+    counted_labels_valid = Counter(y_test)
+    logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
+    logging.info(f'y_test labels: {np.unique(y_test)}')
+    logging.info(f'y_test: {Counter(y_test)}')
+
+    # convert y_valid to y_valid_binary
+    y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
+
+    # prepare X_feat and X_feat_tensor if they are embeddings
+    if args.cls_feat == 'encoded':
+        X_test_tensor = torch.from_numpy(X_test).float()
+        if torch.cuda.is_available():
+            X_test_tensor = X_test_tensor.cuda()
+            X_feat_tensor_test = encoder.cuda().encode(X_test_tensor)
+            X_test_feat = X_feat_tensor_test.cpu().detach().numpy()
+        else:
+            X_test_feat = encoder.encode(X_test_tensor).numpy()
+    else:
+        # args.cls_feat == 'input'
+        X_test_feat = X_test
+
+    # Test data evaluation
+    fout = open(args.result.split('.csv')[0]+'_test.csv', 'w')
+    fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
+    fam_out = open(args.result.split('.csv')[0]+'_family_test.csv', 'w')
+    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+    stat_out = open(args.result.split('.csv')[0]+'_stat_test.csv', 'w')
+    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+    utils.eval_classifier(args, classifier, args.test_end, X_test_feat, y_test_binary, all_test_family, test_families, \
+                    fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+
+    logging.info(f'Run complete for Test.')
+    #--------------------------------------------------------------------------------------------------
 
     """
     Now the following of the code is for pseudo-labeling and sample selection if needed
     """
-    # similarity_score.pseudo_labelling(args, classifier, X_train_feat, y_train_binary)
+    logging.info(f'Pseudo labeling for Test data Started.....')
 
+    y_test_binary = y_test_binary.reshape(-1, 1)
+    df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+                    X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+                        X_test_feat=X_test_feat, y_test_binary=y_test_binary)
+
+    logging.info(f'Test data pseudo label info: {df.head(10)}')
+
+    logging.info(f'Pseudo labeling for Test data Ended.')
+
+    
+
+    #--------------------------------------------------------------------------------------------------
     
     """
     Now the following of the code is for active learning and sample selection if needed
     """
-
-
 
 
     """
@@ -360,10 +413,10 @@ def main():
     # finish writing the result file
     fout.close()
     fam_out.close()
-    sample_out.close()
+    # sample_out.close()
     stat_out.close()
     # sample_score_out.close()
-    sample_explanation.close()
+    # sample_explanation.close()
     return
 
 

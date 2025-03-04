@@ -2,14 +2,15 @@
 
 DATA="/home/ihossain/ISMAIL/Datasets/data/gen_apigraph_drebin"
 SINGLE_CKP=True
-EPOCHS=100
+EPOCHS=240
+RESULT_EPOCHS=20
 K=10
 BSIZE=1024
 MDATE="20230501"
-TRAIN_START="2013-12"
-TRAIN_END="2013-12"
-TEST_START="2017-12"
-TEST_END="2017-12"
+TRAIN_START="2012-01"
+TRAIN_END="2012-12"
+TEST_START="2013-01"
+TEST_END="2013-01"
 ENCODER="simple-enc-mlp"
 ENC_HIDDEN="512-384-256-128"
 MLP_HIDDEN="100-100"
@@ -22,6 +23,7 @@ LOG_PATH="/home/ihossain/ISMAIL/SSL-malware/pseudo_labels/pseudo_labels.log"
 python -u similarity_score.py \
     --single_checkpoint ${SINGLE_CKP} \
     --epochs ${EPOCHS} \
+    --result_epochs ${RESULT_EPOCHS} \
     --k_closest ${K} \
     --data ${DATA} \
     --bsize ${BSIZE} \

@@ -136,7 +136,8 @@ def load_data_and_model(args):
 
     return encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH
 
-def pesudo_labeling(args, ckpt_index):
+def get_train_test_reprentation(args):
+
     logging.info("Pseudo Labeling for Acutal Datasets started")
     encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH = load_data_and_model(args)
 
@@ -168,42 +169,64 @@ def pesudo_labeling(args, ckpt_index):
 
     y_test_labels = y_test_binary.reshape(-1, 1)
 
+    return X_train_feat, y_train_binary, X_test_feat, y_test_labels
+
+def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binary, sm_fn, k, tot_columns):
+
+    topk_sim_weight, topk_sim_indices, min_sim, avg_sim = Similarity().topk_similar(k, sm_fn, X_test_feat, X_train_feat)
+
+    logging.info("Top K similar Indices: %s", topk_sim_indices)
+
+    pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
+                                                               feature_labels=y_train_binary, batch_size=args.bsize)
+
+    logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
+    logging.info("Topk_info shape: %s", topk_info.shape)
+
+    logging.info("Pseudo Labeling for Acutal Datasets ended")
+
+    logging.info("Actual Labels shape: %s", y_test_binary.shape)
+
+    min_sim = min_sim.numpy().reshape(-1, 1)
+    avg_sim = avg_sim.numpy().reshape(-1, 1)
+
+    concatenated_array = np.concatenate((pseudo_labels, min_sim, avg_sim, y_test_binary, topk_info), axis=1)
+    logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
+
+    df = pd.DataFrame(concatenated_array, columns=tot_columns)
+    return df
+
+def pesudo_labeling(args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+                    X_train_feat=None, y_train_binary=None, X_test_feat=None, y_test_binary=None):
+
     column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Min_value', 'Avg_value']
 
-    similarity = Similarity()
-    for k in range(1, args.k_closest, 2):
+    if is_single_k_sm_fn:
         temp_cols = []
-        for c in range(1, k+1):
+        for c in range(1, K+1):
             temp_cols.append(f'Train Point {c}')
         tot_columns = column_names + temp_cols
         logging.info("Total logging.infoColumns: %s", tot_columns)
-        
-        for sm_fn in ['cosine', 'euclidean']:
-            topk_sim_weight, topk_sim_indices, min_sim, avg_sim = similarity.topk_similar(k, sm_fn, X_test_feat, X_train_feat)
 
-            logging.info("Top K similar Indices: %s", topk_sim_indices)
+        return single_k_sm_fn(args, X_train_feat, y_train_binary, \
+                        X_test_feat, y_test_binary, sm_fn, K, tot_columns)
+    else:   
+        for k in range(1, args.k_closest, 2):
+            temp_cols = []
+            for c in range(1, k+1):
+                temp_cols.append(f'Train Point {c}')
+            tot_columns = column_names + temp_cols
+            logging.info("Total logging.infoColumns: %s", tot_columns)
+            
+            for sm_fn in ['cosine', 'euclidean']:
+                
+                df = single_k_sm_fn(args, X_train_feat, y_train_binary, \
+                                    X_test_feat, y_test_binary, sm_fn, k, tot_columns)
+                # args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{ckpt_index}_{sm_fn}_{k}_{args.test_start}.csv'
+                # df.to_csv(args.pseudo_output_path, index=True, header=True)
 
-            pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, feature_labels=y_train_binary, batch_size=args.bsize)
-
-            logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
-            logging.info("Topk_info shape: %s", topk_info.shape)
-
-            logging.info("Pseudo Labeling for Acutal Datasets ended")
-
-            logging.info("Actual Labels shape: %s", y_test_labels.shape)
-
-            min_sim = min_sim.numpy().reshape(-1, 1)
-            avg_sim = avg_sim.numpy().reshape(-1, 1)
-
-            concatenated_array = np.concatenate((pseudo_labels, min_sim, avg_sim, y_test_labels, topk_info), axis=1)
-            logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
-
-            df = pd.DataFrame(concatenated_array, columns=tot_columns)
-
-            args.pseudo_output_path = f'{output_parent_path}{args.learning_rate}_{args.optimizer}_{ckpt_index}_{sm_fn}_{k}_{args.test_start}.csv'
-            df.to_csv(args.pseudo_output_path, index=True, header=True)
-
-    logging.info("Data saved to output.csv")
+        logging.info("Data saved to output.csv")
+        return None
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -237,13 +260,21 @@ if __name__ == "__main__":
     project_path = '/home/ihossain/ISMAIL/SSL-malware'
     model_parent_path = f'{project_path}/models/gen_apigraph_drebin/simple_enc_classifier_lr'
     output_parent_path = f'{project_path}/pseudo_labels/csv/pseudo_labels_output'
+
+    
     
     if args.single_checkpoint:
         logging.info("----------------[Single Check Point]---------------------", )
         args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{args.epochs}.pth'
-        pesudo_labeling(args, args.epochs)
+        X_train_feat, y_train_binary, X_test_feat, y_test_binary = get_train_test_reprentation(args)
+        
+        pesudo_labeling(args=args, is_single_k_sm_fn=False, ckpt_index=args.epochs, X_train_feat=X_train_feat, \
+                            y_train_binary=y_train_binary, X_test_feat=X_test_feat, y_test_binary=y_test_binary)
     else:
         for i in range(0, args.epochs+1, args.result_epochs):
             logging.info("----------------[Epoch: %s]---------------------", i)
             args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{i}.pth'
-            pesudo_labeling(args, i)
+            X_train_feat, y_train_binary, X_test_feat, y_test_binary = get_train_test_reprentation(args)
+
+            pesudo_labeling(args=args, is_single_k_sm_fn=False, ckpt_index=i, X_train_feat=X_train_feat, \
+                            y_train_binary=y_train_binary, X_test_feat=X_test_feat, y_test_binary=y_test_binary)
