@@ -1,0 +1,41 @@
+References:
+
+[1] Chen, Yizheng, Zhoujie Ding, and David Wagner. "Continuous learning for android malware detection." In 32nd USENIX Security Symposium (USENIX Security 23), pp. 1127-1144. 2023.
+
+Experimental Setup:
+Train data - 1 year
+Validation data - next 6 months
+Labeling budget - 50,100,200,400 sampels /  month
+
+APIGraph Data:
+Training - 2012 (3,061 malicious apps and 27,472 benign apps)
+Validation - 2013-01 t0 2013-06
+Test - 2013-07 to 2018-12
+
+AndroZoo Data:
+Training - 2019 (4,542 malicious apps and 40,947 benign apps)
+Validation - 2020-01 t0 2020-06
+Test - 2020-07 to 2021-12
+
+the best baseline with active learning (200 samples /
+month)
+
+
+
+[2] Yang, Limin, Wenbo Guo, Qingying Hao, Arridhana Ciptadi, Ali Ahmadzadeh, Xinyu Xing, and Gang Wang. "{CADE}: Detecting and explaining concept drift samples for security applications." In 30th USENIX Security Symposium (USENIX Security 21), pp. 2327-2344. 2021.
+
+[3] Barbero, Federico, Feargus Pendlebury, Fabio Pierazzi, and Lorenzo Cavallaro. "Transcending transcend: Revisiting malware classification in the presence of concept drift." In 2022 IEEE Symposium on Security and Privacy (SP), pp. 805-823. IEEE, 2022.
+
+[4] Jordaney, Roberto, Kumar Sharad, Santanu K. Dash, Zhi Wang, Davide Papini, Ilia Nouretdinov, and Lorenzo Cavallaro. "Transcend: Detecting concept drift in malware classification models." In 26th USENIX security symposium (USENIX security 17), pp. 625-642. 2017.
+
+[5] Afshar, Bahar Emami, Paula Branco, Tolga Kurt, Utku Gorkem Ketenci, and Hikmet Mazmanoglu. "To Label or to Pseudo Label? Active Learning vs Semi-Supervised Learning for Windows Malware Prediction."
+
+[6] Hendrycks, Dan, Mantas Mazeika, Saurav Kadavath, and Dawn Song. "Using self-supervised learning can improve model robustness and uncertainty." Advances in neural information processing systems 32 (2019).
+
+[7] Fini, Enrico, Victor G. Turrisi Da Costa, Xavier Alameda-Pineda, Elisa Ricci, Karteek Alahari, and Julien Mairal. "Self-supervised models are continual learners." In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 9621-9630. 2022.
+
+[8] Cabannes, Vivien, Leon Bottou, Yann Lecun, and Randall Balestriero. "Active self-supervised learning: A few low-cost relationships are all you need." In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 16274-16283. 2023.
+
+[9] Doucet, Paul, Benjamin Estermann, Till Aczel, and Roger Wattenhofer. "Bridging Diversity and Uncertainty in Active learning with Self-Supervised Pre-Training." arXiv preprint arXiv:2403.03728 (2024).
+
+[10] Bengar, Javad Zolfaghari, Joost van de Weijer, Bartlomiej Twardowski, and Bogdan Raducanu. "Reducing label effort: Self-supervised meets active learning." In Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 1631-1639. 2021.

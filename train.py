@@ -238,8 +238,8 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
         #             logging.info(f'Saving the best loss {loss} model from epoch {epoch}...')
         #             save_model(encoder, optimizer, args, args.epochs, model_path)
     
-        if save_snapshot == True and epoch % 5 == 0:
-            save_path = model_path.replace("Epoch", str(epoch))
+        if save_snapshot == True and epoch % args.result_epochs == 0:
+            save_path = model_path.replace("Final", str(epoch))
             logging.info(f'Saving the model from epoch {epoch} loss {loss} at {save_path}...')
             save_model(encoder, optimizer, args, args.epochs, save_path)
     return

@@ -23,6 +23,18 @@ from models import SimpleEncClassifier, MLPClassifier
 from train import train_encoder, train_classifier
 import similarity_score
 
+def load_data(data_dir, start_month, end_month):
+    """
+    Load the training and validation data.
+    """
+    logging.info(f'Loading {data_dir} dataset from {start_month} to {end_month}')
+    X, y, y_family = data.load_range_dataset_w_benign(data_dir, start_month, end_month)
+    ben_len = X.shape[0] - y_family.shape[0]
+    y_ben_family = np.full(ben_len, 'benign')
+    all_family = np.concatenate((y_family, y_ben_family), axis=0)
+
+    return X, y, all_family
+
 def main():
     """
     Step (0): Init log path and parse args.
@@ -100,7 +112,7 @@ def main():
     else:
         train_dataset_name = f'{args.train_start}'
 
-    SAVED_MODEL_FOLDER = 'models/'
+    SAVED_MODEL_FOLDER = "/home/ihossain/ISMAIL/SSL-malware/models/"
     # only based on malicious training samples
     NUM_FEATURES = X_train.shape[1]
     NUM_CLASSES = len(np.unique(y_train))
@@ -155,7 +167,7 @@ def main():
     else:
         raise Exception(f'The optimizer {args.optimizer} is not supported yet.')
     
-    ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_.pth')
+    ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_Final.pth')
     logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
 
     X_train_final = X_train
@@ -192,7 +204,7 @@ def main():
         s1 = time.time()
         train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
                             optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
-                            save_snapshot = args.snapshot)
+                            save_snapshot = True)
         e1 = time.time()
         logging.info(f'Training Encoder model time: {(e1 - s1):.3f} seconds')
         
@@ -210,7 +222,6 @@ def main():
         logging.info('Saving the model...')
         utils.save_model(encoder, optimizer, args, args.epochs, ENC_MODEL_PATH)
         logging.info(f'Training Encoder model finished: {ENC_MODEL_PATH}')
-
 
     """
     Select the classifier model.
@@ -242,20 +253,81 @@ def main():
         cls_gpu = True
     # saving the results
 
-    fout = open(args.result, 'w')
+    # Tranin data evaluation
+    fout = open(args.result.split('.csv')[0]+'_train.csv', 'w')
     fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0]+'_family.csv', 'w')
+    fam_out = open(args.result.split('.csv')[0]+'_family_train.csv', 'w')
     fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0]+'_stat.csv', 'w')
+    stat_out = open(args.result.split('.csv')[0]+'_stat_train.csv', 'w')
     stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
-    utils.eval_classifier(args, classifier, args.train_end, X_train_feat, y_train_binary, all_train_family, train_families, \
+    utils.eval_classifier(args, classifier, args.train_end, X_train_final, y_train_binary_final, all_train_family, train_families, \
                     fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
-    sample_out = open(args.result.split('.csv')[0]+'_sample.csv', 'w')
-    sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
-    sample_out.flush()
-    sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation.csv', 'w')
-    sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
-    sample_explanation.flush()
+
+    # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
+    # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
+    # sample_out.flush()
+    # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_train.csv', 'w')
+    # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
+    # sample_explanation.flush()
+    #--------------------------------------------------------------------------------------------------
+    """
+    Step (4): Prepare the validation dataset. Load the feature vectors and labels.
+    """
+    # Validation data evaluation
+    fout = open(args.result.split('.csv')[0]+'_valid.csv', 'w')
+    fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
+    fam_out = open(args.result.split('.csv')[0]+'_family_valid.csv', 'w')
+    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+    stat_out = open(args.result.split('.csv')[0]+'_stat_valid.csv', 'w')
+    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+
+    for i in range(1, 7):
+        args.valid_start = args.valid_end
+        args.valid_start = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+        args.valid_end = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+     
+        logging.info(f'Loading {args.data} validation dataset form {args.valid_start} to {args.valid_end}')
+        
+        X_valid, y_valid, all_valid_family = load_data(args.data, args.valid_start, args.valid_end)
+            
+        valid_families = set(all_valid_family)
+        # logging.info(f"Number of y_valid_family = {y_valid_family}")
+        logging.info(f'All valid family = {all_valid_family}')
+
+        # count label distribution
+        counted_labels_valid = Counter(y_valid)
+        logging.info(f'Loaded X_valid: {X_valid.shape}, {y_valid.shape}')
+        logging.info(f'y_valid labels: {np.unique(y_valid)}')
+        logging.info(f'y_valid: {Counter(y_valid)}')
+
+        # convert y_valid to y_valid_binary
+        y_valid_binary = np.array([1 if item != 0 else 0 for item in y_valid])
+
+        # prepare X_feat and X_feat_tensor if they are embeddings
+        if args.cls_feat == 'encoded':
+            X_valid_tensor = torch.from_numpy(X_valid).float()
+            if torch.cuda.is_available():
+                X_valid_tensor = X_valid_tensor.cuda()
+                X_feat_tensor_valid = encoder.cuda().encode(X_valid_tensor)
+                X_valid_feat = X_feat_tensor_valid.cpu().detach().numpy()
+            else:
+                X_valid_feat = encoder.encode(X_valid_tensor).numpy()
+        else:
+            # args.cls_feat == 'input'
+            X_valid_feat = X_valid
+
+        utils.eval_classifier(args, classifier, args.valid_end, X_valid_feat, y_valid_binary, all_valid_family, valid_families, \
+                        fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+    
+    # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
+    # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
+    # sample_out.flush()
+    # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_valid.csv', 'w')
+    # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
+    # sample_explanation.flush()
+ 
+    #--------------------------------------------------------------------------------------------------
+
     logging.info(f'Run complete.')
 
     """
@@ -282,10 +354,6 @@ def main():
         expanding the training set
 
 
-
-
- 
-    
     
     """
     

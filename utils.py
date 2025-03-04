@@ -31,8 +31,11 @@ def parse_args():
     p.add_argument('--train_start', default="2013-12", help='Train start month. e.g., 2012-01')
     p.add_argument('--train_end', default="2013-12", help='Train end month. e.g., 2012-12')
 
-    p.add_argument('--test_start', default="2017-12", help='First test month.')
-    p.add_argument('--test_end', default="2017-12", help='Last test month.')
+    p.add_argument('--valid_start', default="2013-01", help='Validation start month. e.g., 2012-01')
+    p.add_argument('--valid_end', default="2013-06", help='Validation end month. e.g., 2012-12')
+
+    p.add_argument('--test_start', default="2013-07", help='First test month.')
+    p.add_argument('--test_end', default="2018-12", help='Last test month.')
 
     '''
     p.add_argument('--test_start', help='First test month.')
@@ -59,6 +62,8 @@ def parse_args():
                         help='Choosing an optimzer')
     p.add_argument('--epochs', default=250, type=int,
                    help='Training epochs.')
+    p.add_argument('--result_epochs', default=20, type=int,
+                   help='Result Epochs epochs.')
     p.add_argument('--loss_func', default='hi-dist-xent',
             choices=['triplet', 'triplet-mse', 'hi-dist-xent'],
             help='contrastive loss function choice.')
@@ -106,7 +111,7 @@ def parse_args():
                     help='how to reduce the loss per sample')
     p.add_argument('--margin', default=10.0, type=float,
                     help='Maximum margins of dissimilar samples when training contrastive autoencoder.')
-    p.add_argument('--cls-feat', type=str, default='encoded', choices=['encoded', 'input'],
+    p.add_argument('--cls_feat', type=str, default='encoded', choices=['encoded', 'input'],
                    help='input features for the classifier.')
     
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
@@ -114,6 +119,7 @@ def parse_args():
     p.add_argument('--multi_class', action='store_true', help='train multi-class.')
     p.add_argument('--pretrined_model', type=str, default='', help='pretrained model path.')
     p.add_argument('--pseudo_output_path', type=str, default='', help='pseudo output path.')
+
 
     '''
     p.add_argument('--encoder-retrain', action='store_true',

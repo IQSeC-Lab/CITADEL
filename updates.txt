@@ -11,6 +11,11 @@ Date: 01/25/2025:
 
 4. Added two columns into result CSV file to have the result of Min similarity and Average similarity
 
+Observations:
+-------------
+1. The result shows the concept drift as model is train wity previous year's data, but evaluting with next year data
+2. Selecting K as Odd number will be fine to measure majority voting
+3. The min value or Average value is closer to 100%, it could be due to distance matrics 
 
 Plan for Next:
 --------------
