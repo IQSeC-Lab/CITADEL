@@ -150,6 +150,56 @@ def prepare_encoder_and_classifier(
     return cls_gpu, encoder, classifier, X_train_final, \
          y_train_binary_final, ENC_MODEL_PATH 
 
+
+def evaluate_train_data(args, classifier, end_date, X_data, y_data_binary, \
+                        all_data_family, data_families, cls_gpu, eval_multi, data_type):
+    """
+    Evaluate the classifier on the given dataset and write the results to files.
+    """
+    fout = open(args.result.split('.csv')[0] + f'_{data_type}.csv', 'w')
+    fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
+    fam_out = open(args.result.split('.csv')[0] + f'_family_{data_type}.csv', 'w')
+    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+    stat_out = open(args.result.split('.csv')[0] + f'_stat_{data_type}.csv', 'w')
+    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+
+    utils.eval_classifier(args, classifier, end_date, X_data, y_data_binary, all_data_family, data_families, fout, fam_out, stat_out, gpu=cls_gpu, multi=eval_multi)
+
+    fout.close()
+    fam_out.close()
+    stat_out.close()
+
+def evaluate_valid_test_data(args, encoder, end_date, X_data, y_data, all_data_family, \
+                              cls_gpu, eval_multi, data_type, fout, fam_out, stat_out):
+    data_families = set(all_data_family)
+    # logging.info(f"Number of y_valid_family = {y_valid_family}")
+    logging.info(f'All {data_type} family = {all_data_family}')
+
+    # count label distribution
+    # counted_labels_valid = Counter(y_data)
+    logging.info(f'Loaded X_{data_type}: {X_data.shape}, {y_data.shape}')
+    logging.info(f'y_{data_type} labels: {np.unique(y_data)}')
+    logging.info(f'y_{data_type}: {Counter(y_data)}')
+
+    # convert y_valid to y_valid_binary
+    y_data_binary = np.array([1 if item != 0 else 0 for item in y_data])
+
+    # prepare X_feat and X_feat_tensor if they are embeddings
+    if args.cls_feat == 'encoded':
+        X_data_tensor = torch.from_numpy(X_data).float()
+        if torch.cuda.is_available():
+            X_data_tensor = X_data_tensor.cuda()
+            X_feat_tensor_valid = encoder.cuda().encode(X_data_tensor)
+            X_data_feat = X_feat_tensor_valid.cpu().detach().numpy()
+        else:
+            X_data_feat = encoder.encode(X_data_tensor).numpy()
+    else:
+        # args.cls_feat == 'input'
+        X_data_feat = X_data
+
+    utils.eval_classifier(args, encoder, end_date, X_data_feat, y_data_binary, all_data_family, data_families, \
+                    fout, fam_out, stat_out, gpu = cls_gpu, multi = eval_multi)
+
 def main():
     """
     Step (0): Init log path and parse args.
@@ -189,26 +239,8 @@ def main():
     logging.info(f"Number of y_train_family = {y_train_family}")
     logging.info(f'All train family = {all_train_family}')
 
-    """
-    if args.data.startswith('tesseract') or \
-        args.data.startswith('gen_tesseract') or \
-        args.data.startswith('fam_tesseract') or \
-        args.data.startswith('emberv2'):
-        X_train, y_train, all_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
-    else:
-        logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
-        logging.info(f'For Androzoo dataset start with the month 2019-01to2019-12_selected.')
-        
-        X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
-        # all_train_family has 'benign'
-        ben_len = X_train.shape[0] - y_train_family.shape[0]
-        y_ben_family = np.full(ben_len, 'benign')
-        all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
-            
-    train_families = set(all_train_family)
-    """
     # count label distribution
-    counted_labels = Counter(y_train)
+    # counted_labels = Counter(y_train)
     logging.info(f'Loaded X_train: {X_train.shape}, {y_train.shape}')
     logging.info(f'y_train labels: {np.unique(y_train)}')
     logging.info(f'y_train: {Counter(y_train)}')
@@ -221,11 +253,11 @@ def main():
     """
     Step (2): Variable names and file names.
     """
-    # some commonly used variables.
-    if args.train_start != args.train_end:
-        train_dataset_name = f'{args.train_start}to{args.train_end}'
-    else:
-        train_dataset_name = f'{args.train_start}'
+    # # some commonly used variables.
+    # if args.train_start != args.train_end:
+    #     train_dataset_name = f'{args.train_start}to{args.train_end}'
+    # else:
+    #     train_dataset_name = f'{args.train_start}'
 
     SAVED_MODEL_FOLDER = "/home/ihossain/ISMAIL/SSL-malware/models/"
     # only based on malicious training samples
@@ -250,18 +282,10 @@ def main():
             y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
             args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
                 NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir)
-        
 
-        # Tranin data evaluation
-        fout = open(args.result.split('.csv')[0]+'_train.csv', 'w')
-        fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-        fam_out = open(args.result.split('.csv')[0]+'_family_train.csv', 'w')
-        fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-        stat_out = open(args.result.split('.csv')[0]+'_stat_train.csv', 'w')
-        stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
-        utils.eval_classifier(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
-                               all_train_family, train_families, \
-                                fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+        # Train data evaluation
+        evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
+                       all_train_family, train_families, cls_gpu, args.eval_multi, 'train')
 
         # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
         # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
@@ -283,42 +307,16 @@ def main():
         stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
         for i in range(1, 7):
-            args.valid_start = args.valid_end
-            args.valid_start = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
-            args.valid_end = (dt.datetime.strptime(args.train_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+            valid_start = (dt.datetime.strptime(args.valid_start, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+            valid_end = (dt.datetime.strptime(args.valid_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
         
             # logging.info(f'Loading {args.data} validation dataset form {args.valid_start} to {args.valid_end}')
             
-            X_valid, y_valid, all_valid_family = load_data(args.data, args.valid_start, args.valid_end)
+            X_valid, y_valid, all_valid_family = load_data(args.data, valid_start, valid_end)
                 
-            valid_families = set(all_valid_family)
-            # logging.info(f"Number of y_valid_family = {y_valid_family}")
-            logging.info(f'All valid family = {all_valid_family}')
-
-            # count label distribution
-            counted_labels_valid = Counter(y_valid)
-            logging.info(f'Loaded X_valid: {X_valid.shape}, {y_valid.shape}')
-            logging.info(f'y_valid labels: {np.unique(y_valid)}')
-            logging.info(f'y_valid: {Counter(y_valid)}')
-
-            # convert y_valid to y_valid_binary
-            y_valid_binary = np.array([1 if item != 0 else 0 for item in y_valid])
-
-            # prepare X_feat and X_feat_tensor if they are embeddings
-            if args.cls_feat == 'encoded':
-                X_valid_tensor = torch.from_numpy(X_valid).float()
-                if torch.cuda.is_available():
-                    X_valid_tensor = X_valid_tensor.cuda()
-                    X_feat_tensor_valid = encoder.cuda().encode(X_valid_tensor)
-                    X_valid_feat = X_feat_tensor_valid.cpu().detach().numpy()
-                else:
-                    X_valid_feat = encoder.encode(X_valid_tensor).numpy()
-            else:
-                # args.cls_feat == 'input'
-                X_valid_feat = X_valid
-
-            utils.eval_classifier(args, classifier, args.valid_end, X_valid_feat, y_valid_binary, all_valid_family, valid_families, \
-                            fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+            # Valid data evaluation
+            evaluate_valid_test_data(args, classifier, valid_end, X_valid, y_valid,\
+                       all_valid_family, cls_gpu, args.eval_multi, 'valid', fout, fam_out, stat_out)
         
         # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
         # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
@@ -365,7 +363,6 @@ def main():
         # args.cls_feat == 'input'
         X_train_feat = X_train
     
-
     # Test data evaluation
     fout = open(args.result.split('.csv')[0]+'_test.csv', 'w')
     fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
@@ -383,35 +380,9 @@ def main():
             
         X_test, y_test, all_test_family = load_data(args.data, test_start, test_end)
             
-        test_families = set(all_test_family)
-        # logging.info(f"Number of y_valid_family = {y_valid_family}")
-        logging.info(f'All test family = {all_test_family}')
-
-        # count label distribution
-        counted_labels_valid = Counter(y_test)
-        logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
-        logging.info(f'y_test labels: {np.unique(y_test)}')
-        logging.info(f'y_test: {Counter(y_test)}')
-
-        # convert y_valid to y_valid_binary
-        y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
-
-        # prepare X_feat and X_feat_tensor if they are embeddings
-        if args.cls_feat == 'encoded':
-            X_test_tensor = torch.from_numpy(X_test).float()
-            if torch.cuda.is_available():
-                X_test_tensor = X_test_tensor.cuda()
-                X_feat_tensor_test = encoder.cuda().encode(X_test_tensor)
-                X_test_feat = X_feat_tensor_test.cpu().detach().numpy()
-            else:
-                X_test_feat = encoder.encode(X_test_tensor).numpy()
-        else:
-            # args.cls_feat == 'input'
-            X_test_feat = X_test
-           
-        # args.test_end = test_end
-        utils.eval_classifier(args, classifier, test_end, X_test_feat, y_test_binary, all_test_family, test_families, \
-                        fout, fam_out, stat_out, gpu = cls_gpu, multi = args.eval_multi)
+        # Test data evaluation
+        evaluate_valid_test_data(args, classifier, test_end, X_test, y_test,\
+                       all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
 
     logging.info(f'Run complete for Test.')
     #--------------------------------------------------------------------------------------------------
