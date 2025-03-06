@@ -59,16 +59,18 @@ class Similarity:
 
         sim_weight, sim_indices = sim_matrix.topk(k=K, dim=-1)
 
-        # Calculate the minimum and average values of the top K similarities
-        min_sim = sim_weight.min(dim=-1).values
+        # Calculate the maximum and average values of the top K similarities
+        max_sim = sim_weight.max(dim=-1).values
         avg_sim = sim_weight.mean(dim=-1)
 
-        return sim_weight, sim_indices, min_sim, avg_sim
+        return sim_weight, sim_indices, max_sim, avg_sim
 
-    def get_majority_label(self, sim_score, sim_indices, feature_labels, batch_size):
+    def get_majority_label(self, sim_score, sim_indices, feature_labels, feature_family, batch_size):
         # Convert NumPy arrays to PyTorch tensors if necessary
         if isinstance(feature_labels, np.ndarray):
             feature_labels = torch.tensor(feature_labels, dtype=torch.float32)
+        # if isinstance(feature_family, np.ndarray):
+        #     feature_family = torch.tensor([hash(fam) for fam in feature_family], dtype=torch.float32)
         if isinstance(sim_indices, np.ndarray):
             sim_indices = torch.tensor(sim_indices, dtype=torch.long)
 
@@ -77,25 +79,37 @@ class Similarity:
         if feature_labels.dim() == 1:
             feature_labels = feature_labels.unsqueeze(0)
 
+        # Ensure feature_family is a 1D tensor
+        if feature_family.dim() == 1:
+            feature_family = feature_family.unsqueeze(0)
+
         # Expand feature_labels to match the dimensions of sim_indices
         expanded_feature_labels = feature_labels.expand(sim_indices.size(0), -1)
+        # Expand feature_family to match the dimensions of sim_indices
+        expanded_feature_family = feature_family.expand(sim_indices.size(0), -1)
         logging.info("Feature Labels Shape after unsqueeze: %s", feature_labels.shape)
         logging.info("Sim Indices Shape: %s", sim_indices.shape)
         logging.info("Expanded Feature Labels Shape: %s", expanded_feature_labels.shape)
+        logging.info("Expanded Feature Family Shape: %s", expanded_feature_family.shape)
 
         # Gather the labels based on sim_indices
         sim_labels = torch.gather(expanded_feature_labels, dim=1, index=sim_indices)
+
+        # # Gather the Family based on sim_indices
+        # sim_families = torch.gather(expanded_feature_labels, dim=1, index=sim_indices)
         logging.info("Sim Labels Shape: %s", sim_labels.shape)
 
         # Initialize an empty tensor to store (index, label) pairs
-        index_label_pairs = [[None for _ in range(sim_indices.size(1))] for _ in range(sim_indices.size(0))]
+        index_label_family = [[None for _ in range(sim_indices.size(1))] for _ in range(sim_indices.size(0))]
 
         # Iterate over sim_indices and fetch the corresponding labels from feature_labels
+        # tuple: (index, similarity_score, label, family)
         for i in range(sim_indices.size(0)):
             for j in range(sim_indices.size(1)):
                 index = sim_indices[i, j].item()
                 label = feature_labels[0, index].item()
-                index_label_pairs[i][j] = str((int(index), int(label)))
+                family = feature_family[0, index].item()
+                index_label_family[i][j] = str((int(index), float(sim_score[i,j]), int(label), str(family)))
 
         # Count occurrences of 0s and 1s along each row
         count_zeros = (sim_labels == 0).sum(dim=1)
@@ -107,13 +121,17 @@ class Similarity:
 
         # Create a (rows, 2) matrix: [majority_value, majority_count]
         result_matrix = torch.stack((majority_value, majority_count), dim=1)
-        return result_matrix.numpy(), np.array(index_label_pairs)
+        return result_matrix.numpy(), np.array(index_label_family)
 
 def load_data_and_model(args):
     X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
     logging.info('X_train shape: %s', X_train.shape)
     logging.info('y_train shape: %s', y_train.shape)
     logging.info('y_train_family shape: %s', y_train_family.shape)
+
+    ben_len = X_train.shape[0] - y_train_family.shape[0]
+    y_ben_family = np.full(ben_len, 'benign')
+    all_train_family = np.concatenate((y_train_family, y_ben_family), axis=0)
 
     X_test, y_test, _ = data.load_range_dataset_w_benign(args.data, args.test_start, args.test_end)
     logging.info('X_test shape: %s', X_test.shape)
@@ -134,12 +152,12 @@ def load_data_and_model(args):
     else:
         raise Exception(f'The encoder {args.encoder} is not supported yet.')
 
-    return encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH
+    return encoder, X_train, y_train_binary, all_train_family, X_test, y_test_binary, ENC_MODEL_PATH
 
 def get_train_test_reprentation(args):
 
     logging.info("Pseudo Labeling for Acutal Datasets started")
-    encoder, X_train, y_train_binary, X_test, y_test_binary, ENC_MODEL_PATH = load_data_and_model(args)
+    encoder, X_train, y_train_binary, _, X_test, y_test_binary, ENC_MODEL_PATH = load_data_and_model(args)
 
     logging.info("Model loading started...")
     state_dict = torch.load(ENC_MODEL_PATH, weights_only=False)
@@ -173,7 +191,7 @@ def get_train_test_reprentation(args):
 
 def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binary, sm_fn, k, tot_columns):
 
-    topk_sim_weight, topk_sim_indices, min_sim, avg_sim = Similarity().topk_similar(k, sm_fn, X_test_feat, X_train_feat)
+    topk_sim_weight, topk_sim_indices, max_sim, avg_sim = Similarity().topk_similar(k, sm_fn, X_test_feat, X_train_feat)
 
     logging.info("Top K similar Indices: %s", topk_sim_indices)
 
@@ -187,14 +205,67 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
 
     logging.info("Actual Labels shape: %s", y_test_binary.shape)
 
-    min_sim = min_sim.numpy().reshape(-1, 1)
+    max_sim = max_sim.numpy().reshape(-1, 1)
     avg_sim = avg_sim.numpy().reshape(-1, 1)
 
-    concatenated_array = np.concatenate((pseudo_labels, min_sim, avg_sim, y_test_binary, topk_info), axis=1)
+    concatenated_array = np.concatenate((pseudo_labels, y_test_binary, max_sim, avg_sim, topk_info), axis=1)
     logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
     df = pd.DataFrame(concatenated_array, columns=tot_columns)
     return df
+
+def get_high_similar_samples(args, X_train_feat, y_train_binary, all_train_family,\
+                              X_test_feat, y_test_binary, sm_fn='euclidean', K=5, num_samples=50):
+    
+    topk_sim_weight, topk_sim_indices, max_sim, avg_sim = Similarity().topk_similar(K, sm_fn, X_test_feat, X_train_feat)
+
+    logging.info("Top K similar Indices: %s", topk_sim_indices)
+
+    pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
+                                                               feature_labels=y_train_binary, batch_size=args.bsize)
+
+    logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
+    logging.info("Topk_info shape: %s", topk_info.shape)
+    logging.info("Pseudo Labeling for Acutal Datasets ended")
+    logging.info("Actual Labels shape: %s", y_test_binary.shape)
+
+    max_sim = max_sim.numpy().reshape(-1, 1)
+    avg_sim = avg_sim.numpy().reshape(-1, 1)
+
+    concatenated_array = np.concatenate((pseudo_labels, y_test_binary, max_sim, avg_sim, topk_info), axis=1)
+    logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
+
+    df = pd.DataFrame(concatenated_array)
+    # create new index column to maintain the original indices of the samples
+    df.insert(0, '', df.index)
+
+    # Sort the DataFrame based on the 5th column (index 4) in descending order
+    df_sorted = df.sort_values(by=df.columns[4], ascending=False)
+    # Add a new column for original indices before the first column
+
+    # Take the top num_samples rows while keeping the original indices
+    df_top_samples = df_sorted.head(num_samples)
+
+    logging.info("Top Samples Shape: %s", df_top_samples.shape)
+ 
+    # Extract the family based on the maximum similarity score among the tuples
+    families = []
+    for row in df_top_samples.iloc[:, -K:]:
+        max_sim_score = -1
+        family = None
+        for tup in row:
+            _, sim_score, _, fam = eval(tup)
+            if sim_score > max_sim_score:
+                max_sim_score = sim_score
+                family = fam
+        families.append(family)
+
+    #return indices (df_top_samples[:, 0]) of the top samples 
+    # and their corresponding pseudo labels (df_top_samples[:, 1])
+    indices = df_top_samples.iloc[:, 0].values
+    pseudo_labels = df_top_samples.iloc[:, 1].values
+    families = np.array(families)
+    return indices, pseudo_labels, families
 
 def pesudo_labeling(args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
                     X_train_feat=None, y_train_binary=None, X_test_feat=None, y_test_binary=None):
@@ -260,15 +331,13 @@ if __name__ == "__main__":
     project_path = '/home/ihossain/ISMAIL/SSL-malware'
     model_parent_path = f'{project_path}/models/gen_apigraph_drebin/simple_enc_classifier_lr'
     output_parent_path = f'{project_path}/pseudo_labels/csv/pseudo_labels_output'
-
-    
     
     if args.single_checkpoint:
         logging.info("----------------[Single Check Point]---------------------", )
-        args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_{args.epochs}.pth'
+        args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_Final.pth'
         X_train_feat, y_train_binary, X_test_feat, y_test_binary = get_train_test_reprentation(args)
         
-        pesudo_labeling(args=args, is_single_k_sm_fn=False, ckpt_index=args.epochs, X_train_feat=X_train_feat, \
+        pesudo_labeling(args=args, is_single_k_sm_fn=True, ckpt_index=args.epochs, X_train_feat=X_train_feat, \
                             y_train_binary=y_train_binary, X_test_feat=X_test_feat, y_test_binary=y_test_binary)
     else:
         for i in range(0, args.epochs+1, args.result_epochs):

@@ -5,8 +5,8 @@ LR=0.003
 OPT=sgd
 SCH=step
 DECAY=0.95
-EPOCHS=250
-RESULT_EPOCHS=50
+EPOCHS=10
+RESULT_EPOCHS=5
 WLR=0.00015
 WE=100
 # DATA=/home/ihossain/ISMAIL/Datasets/data/gen_androzoo_drebin
@@ -22,7 +22,7 @@ TEST_END=2018-01
 
 RESULT_DIR=/home/ihossain/ISMAIL/SSL-malware/results_ours
 AL_OPT=adam
-PRE=True
+PRE=False
 
 CNT=200
 

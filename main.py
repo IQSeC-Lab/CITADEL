@@ -371,18 +371,18 @@ def main():
     stat_out = open(args.result.split('.csv')[0]+'_stat_test.csv', 'w')
     stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
-    for i in range(1, 13):
-        # args.test_start = args.test_end
-        test_start = (dt.datetime.strptime(args.test_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
-        test_end = (dt.datetime.strptime(args.test_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
-     
-        logging.info(f'Loading {args.data} Test dataset form {test_start} to {test_end}')
-            
-        X_test, y_test, all_test_family = load_data(args.data, test_start, test_end)
-            
-        # Test data evaluation
-        evaluate_valid_test_data(args, classifier, test_end, X_test, y_test,\
-                       all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
+    # for i in range(1, 13):
+    # args.test_start = args.test_end
+    # test_start = (dt.datetime.strptime(args.test_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
+    # test_end = (dt.datetime.strptime(args.test_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
+    
+    logging.info(f'Loading {args.data} Test dataset form {args.test_start} to {args.test_end}')
+        
+    X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
+        
+    # Test data evaluation
+    evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
+                    all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
 
     logging.info(f'Run complete for Test.')
     #--------------------------------------------------------------------------------------------------
@@ -390,32 +390,31 @@ def main():
     """
     Now the following of the code is for pseudo-labeling and sample selection if needed
     """
-    # logging.info(f'Pseudo labeling for Test data Started.....')
+    logging.info(f'Pseudo labeling for Test data Started.....')
 
-    # y_test_labels = y_test_binary.reshape(-1, 1)
-    # df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
-    #                 X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
-    #                     X_test_feat=X_test_feat, y_test_binary=y_test_labels)
+    y_test_labels = y_test.reshape(-1, 1)
+    df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+                    X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+                        X_test_feat=X_test, y_test_binary=y_test_labels)
 
-    # logging.info(f'Test data pseudo label info: {df.head(10)}')
-    # logging.info(f'Pseudo labeling for Test data Ended.')
-    # logging.info(f'Sample selection Started.....')
+    logging.info(f'Test data pseudo label info: {df.head(10)}')
+    logging.info(f'Pseudo labeling for Test data Ended.')
+    logging.info(f'Sample selection Started.....')
 
-    # # Sort the dataframe based on 'Min_similarity' column and select the first 200 rows
-    # df_sorted['original_index'] = df.index
-    # df_sorted = df.sort_values(by='Min_value').head(200)
-    # logging.info(f'Selected top 200 samples based on minimum similarity:\n{df_sorted.head(10)}')
-    # selected_indices = df_sorted['original_index'].values
-    # selected_X_test_feat = X_test_feat[selected_indices]
-    # selected_y_test_binary = y_test_binary[selected_indices]
-    # logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
+    # Sort the dataframe based on 'Min_similarity' column and select the first 200 rows
+    df_sorted['original_index'] = df.index
+    df_sorted = df.sort_values(by='Min_value').head(200)
+    logging.info(f'Selected top 200 samples based on minimum similarity:\n{df_sorted.head(10)}')
+    selected_indices = df_sorted['original_index'].values
+    selected_X_test_feat = X_test[selected_indices]
+    selected_y_test_binary = y_test[selected_indices]
+    logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
 
-    # # Merge the selected test samples with the training data
-    # X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
-    # y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
-    # logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
-    # logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
-
+    # Merge the selected test samples with the training data
+    X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
+    y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
+    logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
+    logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
 
     #--------------------------------------------------------------------------------------------------
     
