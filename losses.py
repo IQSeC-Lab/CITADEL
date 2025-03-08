@@ -318,3 +318,85 @@ class HiDistanceXentLoss(nn.Module):
         torch.cuda.empty_cache()
 
         return loss, supcon_loss, xent_bin_loss
+class SSL_Loss(nn.Module):
+    def __init__(self, reduce = 'mean', sample_reduce = 'mean'):
+        super(SSL_Loss, self).__init__()
+        # reduce: whether use 'mean' reduction or keep sample loss
+        self.reduce = reduce
+        self.sample_reduce = sample_reduce
+
+    def forward(self, pseudo_preds=None, pseudo_labels=None, pseudo_weight=0.5, 
+            temperature=1.0, uncertainty_weight=1.0):
+        """
+        Args:
+            xent_lambda: scale the binary xent loss
+            y_bin_pred: predicted MLP output
+            y_bin_batch: binary one-hot encoded y
+            features: hidden vector of shape [bsz, feature_dim].
+            labels: ground truth of shape [bsz].
+            margin: margin for HiDistanceLoss.
+            weight: sample weights to adjust the sample loss values
+            split: whether it is in test data, so we ignore these entries
+            pseudo_preds: predicted features for pseudo labels
+            pseudo_labels: pseudo labels for the features
+        Returns:
+            A loss scalar.
+        """
+        # HiDistanceXent = HiDistanceXentLoss().cuda()
+        # loss, supcon_loss, xent_loss = HiDistanceXent(xent_lambda, \
+        #                                     y_bin_pred, y_bin_batch, \
+        #                                     features, labels = labels, \
+        #                                     margin = margin, \
+        #                                     weight = weight, split=split)
+        # pseudo loss
+        if pseudo_preds is not None and pseudo_labels is not None:
+            pseudo_preds = pseudo_preds.float()
+            pseudo_labels = pseudo_labels.float()
+            
+            bce_loss_fn = nn.BCELoss()  # Create an instance of BCELoss
+            pseudo_loss = bce_loss_fn(pseudo_preds[:, 1], pseudo_labels)  ### check this // some used pseudo_preds/temperature
+            
+            #pseudo_loss = nn.BCELoss(pseudo_preds, pseudo_labels) ### check this // some used pseudo_preds/temperature
+            
+            # Weight pseudo-labels by prediction confidence
+            confidence_weights = self.get_confidence_weights(pseudo_preds)
+            weighted_pseudo_loss = pseudo_loss * confidence_weights
+            
+            # Add uncertainty weighting for pseudo-labeled samples
+            uncertainty = self.calculate_uncertainty(pseudo_preds)
+            normalized_uncertainty = uncertainty / (uncertainty.max() + 1e-10)
+            weighted_pseudo_loss = weighted_pseudo_loss * (1 + uncertainty_weight * normalized_uncertainty)
+            pseudo_loss = pseudo_weight * weighted_pseudo_loss.mean()
+            
+        return pseudo_loss
+    
+    def calculate_uncertainty(self, probs):
+        """
+        Calculates uncertainty scores based on prediction entropy.
+        
+        Entropy measures the uncertainty of a prediction, with higher values indicating greater uncertainty.
+        
+        Args:
+            outputs (torch.Tensor): Model outputs (logits) for the input data.
+        
+        Returns:
+            torch.Tensor: Uncertainty values computed as entropy for each sample in the batch.
+        """
+        entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)
+        return entropy
+    
+    def get_confidence_weights(self, probs):
+        """
+        Calculates confidence-based weights for pseudo-labels based on prediction confidence.
+        
+        Confidence is computed as the highest probability predicted for each sample.
+        
+        Args:
+            outputs (torch.Tensor): Model outputs (logits) for the input data.
+        
+        Returns:
+            torch.Tensor: Confidence weights for each sample based on the predicted probabilities.
+        """
+        confidence, _ = torch.max(probs, dim=-1)
+        return confidence
+            

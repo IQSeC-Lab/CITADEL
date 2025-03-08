@@ -17,7 +17,7 @@ def parse_args():
     """
     p = argparse.ArgumentParser()
 
-    p.add_argument('--data', help='The dataset to use.')
+    p.add_argument('--data', default="/home/mhaque3/myDir/data/gen_apigraph_drebin", help='The dataset to use.')
 
     # for debugging messages
     p.add_argument('--verbose', action='store_true',
@@ -27,13 +27,13 @@ def parse_args():
 
 
 
-    p.add_argument('--mdate', help='Encoder model date to use.')
+    p.add_argument('--mdate', default=20230501, help='Encoder model date to use.')
     #p.add_argument('--train', default=None, help='Train month. e.g., 2012-01')
-    p.add_argument('--train_start', default=None, help='Train start month. e.g., 2012-01')
-    p.add_argument('--train_end', default=None, help='Train end month. e.g., 2012-12')
+    p.add_argument('--train_start', default='2012-01', help='Train start month. e.g., 2012-01')
+    p.add_argument('--train_end', default='2012-12', help='Train end month. e.g., 2012-12')
     
-    p.add_argument('--test_start', help='First test month.')
-    p.add_argument('--test_end', help='Last test month.')
+    p.add_argument('--test_start', default='2013-01', help='First test month.')
+    p.add_argument('--test_end', default='2018-12', help='Last test month.')
 
     '''
     
@@ -47,10 +47,10 @@ def parse_args():
     p.add_argument('--result', type=str, help='file name to generate MLP performance csv result.')
     '''
     # encoder model
-    p.add_argument('--encoder', default=None, \
+    p.add_argument('--encoder', default='simple-enc-mlp', \
                     choices=['cae', 'enc', 'mlp', 'simple-enc-mlp'], \
                     help='The encoder model to get embeddings of the input.')
-    p.add_argument('--enc-hidden',
+    p.add_argument('--enc-hidden', default="512-384-256-128", type=str,
                 help='The hidden layers of the encoder, example: "512-128-32"')
     p.add_argument('--learning_rate', default=0.01, type=float,
                    help='Overall learning rate.')
@@ -59,14 +59,14 @@ def parse_args():
     p.add_argument('--epochs', default=250, type=int,
                    help='Training epochs.')
     p.add_argument('--loss_func', default='hi-dist-xent',
-            choices=['triplet', 'triplet-mse', 'hi-dist-xent'],
+            choices=['triplet', 'triplet-mse', 'hi-dist-xent', 'ssl-loss'],
             help='contrastive loss function choice.')
     # classifier
-    p.add_argument('-c', '--classifier', default='svm',
+    p.add_argument('-c', '--classifier', default='simple-enc-mlp',
                    choices=['mlp', 'svm', 'gbdt', 'simple-enc-mlp'],
                    help='The target classifier to use.')
     
-    p.add_argument('--mlp-hidden',
+    p.add_argument('--mlp-hidden', default='100-100', type=str,
                    help='The hidden layers of the MLP classifier, example: "100-30", which in drebin_new_7 case would make the architecture as 1340-100-30-7')
     p.add_argument('--mlp-batch-size', default=32, type=int,
                    help='MLP classifier batch_size.')
@@ -81,7 +81,7 @@ def parse_args():
     p.add_argument('--snapshot', action='store_true',
                    help='Whether to save the model at every 50 epoch.')
     
-    p.add_argument('--sampler', type=str, choices=['mperclass', 'proportional', 'half',
+    p.add_argument('--sampler', default='half', type=str, choices=['mperclass', 'proportional', 'half',
                     'triplet', 'random'],
                    help='The sampler to sample batches.')
     p.add_argument('--scheduler', default='step', type=str, choices=['step', 'cosine'],
@@ -90,22 +90,20 @@ def parse_args():
                         help='decay rate for learning rate')
     p.add_argument('--lr_decay_epochs', type=str, default='30,1000,30',
                         help='where to decay lr. start epoch, end epoch, step size.')
-    p.add_argument('--xent-lambda', default=1, type=float,
+    p.add_argument('--xent-lambda', default=100, type=float,
                    help='lambda to scale the binary cross entropy loss.')
     
     p.add_argument('--count', type=int, default=200, help='Sampling count')
-    p.add_argument('--warm_learning_rate', default=0.001, type=float,
-                   help='Warm start learning rate.')
     p.add_argument('--display-interval', default=10, type=int,
                     help='Show logs about loss and other information every xxx epochs when training the encoder.')
     p.add_argument('--local_pseudo_loss', action='store_true', help='Use local pseudo loss to select samples')
-    p.add_argument('--reduce', type=str, choices=['none', 'max', 'mean'],
+    p.add_argument('--reduce', default='none', type=str, choices=['none', 'max', 'mean'],
                     help='how to reduce the loss to compute the pseudo loss')
-    p.add_argument('--sample_reduce', type=str, choices=['mean', 'max'],
+    p.add_argument('--sample_reduce', default='mean', type=str, choices=['mean', 'max'],
                     help='how to reduce the loss per sample')
     p.add_argument('--margin', default=10.0, type=float,
                     help='Maximum margins of dissimilar samples when training contrastive autoencoder.')
-    p.add_argument('--cls-feat', type=str, default='input', choices=['encoded', 'input'],
+    p.add_argument('--cls-feat', type=str, default='encoded', choices=['encoded', 'input'],
                    help='input features for the classifier.')
     p.add_argument('--retrain-first', action='store_true',
                    help='Whether to retrain the first model.')
@@ -114,51 +112,38 @@ def parse_args():
     p.add_argument('--eval_multi', action='store_true', help='evaluate multi-class prediction performance.')
     p.add_argument('--multi_class', action='store_true', help='train multi-class.')
     p.add_argument('--accumulate_data', action='store_true', help='Whether to accumulate test data from previous month, excluding the selected test samples')
-    
-
-    '''
-    p.add_argument('--encoder-retrain', action='store_true',
-                   help='Whether to train the encoder again.')
+    p.add_argument('--warm_learning_rate', default=0.001, type=float,
+                   help='Warm start learning rate.')
     p.add_argument('--cold-start', action='store_true',
                    help='Whether to retrain the encoder from scratch.')
+    p.add_argument('--al_optimizer', default='adam', type=str, choices=['adam', 'sgd'],
+                        help='Choosing an optimzer')
+    p.add_argument('--al', action='store_true', help='Whether to do active learning.')
+    p.add_argument('--al_epochs', default=50, type=int,
+                   help='Active learning training epochs.')
+    p.add_argument('--encoder-retrain', action='store_true',
+                   help='Whether to train the encoder again.')
     
-    
+
+    # semi-supervised learning
+    p.add_argument('--ssl', action='store_true', help='Whether to do semi-supervised learning.')
+    p.add_argument('--ssl_epochs', default=50, type=int,
+                   help='Semi-supervised learning training epochs.')
+    p.add_argument('--split-train', action='store_true',
+                   help='Whether to split train data for SSL.')
+    p.add_argument('--pseudolabel', action='store_true', help='Whether to do active learning.')
+    '''
     # more arguments can be added here
 
     
     # arguments for the Encoder Classifier model.
     
-    p.add_argument('--bsize', default=None, type=int,
-                   help='Training batch size.')
     p.add_argument('--plb', default=None, type=int,
                    help='Pseudo loss batch size.')
     p.add_argument('--sample-per-class', default=2, type=int,
                    help='Number of samples for each class in a batch.')
     
-    p.add_argument('--learning_rate', default=0.01, type=float,
-                   help='Overall learning rate.')
-    p.add_argument('--warm_learning_rate', default=0.001, type=float,
-                   help='Warm start learning rate.')
     
-    p.add_argument('--lr_decay_rate', type=float, default=1,
-                        help='decay rate for learning rate')
-    p.add_argument('--lr_decay_epochs', type=str, default='30,1000,30',
-                        help='where to decay lr. start epoch, end epoch, step size.')
-    
-    p.add_argument('--al_optimizer', default=None, type=str, choices=['adam', 'sgd'],
-                        help='Choosing an optimzer')
-    p.add_argument('--epochs', default=250, type=int,
-                   help='Training epochs.')
-    p.add_argument('--al_epochs', default=50, type=int,
-                   help='Active learning training epochs.')
-    p.add_argument('--xent-lambda', default=1, type=float,
-                   help='lambda to scale the binary cross entropy loss.')
-    
-    p.add_argument('--retrain-first', action='store_true',
-                   help='Whether to retrain the first model.')
-    p.add_argument('--sampler', type=str, choices=['mperclass', 'proportional', 'half',
-                    'triplet', 'random'],
-                   help='The sampler to sample batches.')
     
     # arguments for the Contrastive Autoencoder and drift detection (build on the samples of top 7 families for example)
     p.add_argument('--cae-hidden',
@@ -173,10 +158,7 @@ def parse_args():
                    help='Contrastive Autoencoder epochs.')
     p.add_argument('--cae-lambda', default=1e-1, type=float,
                    help='lambda in the loss function of contrastive autoencoder.')
-    p.add_argument('--margin', default=10.0, type=float,
-                    help='Maximum margins of dissimilar samples when training contrastive autoencoder.')
-    p.add_argument('--display-interval', default=10, type=int,
-                    help='Show logs about loss and other information every xxx epochs when training the encoder.')
+    
                
     p.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
     p.add_argument('--temperature', default=0.5, type=float, help='Temperature used in softmax')
@@ -194,6 +176,67 @@ def parse_args():
 def create_folder(name):
     if not os.path.exists(name):
         os.makedirs(name)
+
+def generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9):
+    encoder.eval()
+    device = (torch.device('cuda')
+                if torch.cuda.is_available()
+                else torch.device('cpu'))
+    encoder = encoder.to(device)
+    X_unlabeled = torch.from_numpy(X_unlabeled).float().to(device)
+    with torch.no_grad():
+        probabilities = encoder.predict_proba(X_unlabeled)
+        
+        #probabilities = torch.nn.functional.softmax(outputs, dim=1)
+        confidence, pseudo_labels = torch.max(probabilities, dim=1)
+
+        # Select only high-confidence pseudo-labels
+        confident_indices = confidence > threshold
+        X_pseudo = X_unlabeled[confident_indices]
+        y_pseudo = pseudo_labels[confident_indices]
+    return X_pseudo, y_pseudo
+
+def get_labeled_unlabeled_indices(X_data, y_data, percentage_labeled=10):
+    """
+    Splits an dataset into labeled and unlabeled sets while preserving class distribution.
+    
+    Parameters:
+    - X_data, y_data: dataset.
+    - percentage_labeled: Percentage of labeled samples per malware family.
+    
+    Returns:
+    - labeled and unlabeled indices.
+    """
+    # Load the dataset
+    features, labels = X_data, y_data
+    
+    # Get unique malware families
+    unique_labels = np.unique(labels)
+    
+    labeled_features, labeled_labels = [], []
+    unlabeled_features = []
+    labeled_indices = []
+    unlabeled_indices = []
+
+    # Split each malware family separately
+    for label in unique_labels:
+        # Get indices for this class
+        class_indices = np.where(labels == label)[0]
+        np.random.shuffle(class_indices)  # Shuffle indices
+        
+        # Compute split point
+        num_labeled = int(len(class_indices) * (percentage_labeled / 100.0))
+        
+        # Get labeled and unlabeled indices
+        labeled_idx = class_indices[:num_labeled]
+        unlabeled_idx = class_indices[num_labeled:]
+        labeled_indices.extend(labeled_idx)
+        unlabeled_indices.extend(unlabeled_idx)
+    
+
+    #print(f"Labeled samples: {len(labeled_features)}, Unlabeled samples: {len(unlabeled_features)}")
+    return labeled_indices, unlabeled_indices
+
 
 def get_model_dims(model_name, input_layer_num, hidden_layer_num, output_layer_num):
     """convert hidden layer arguments to the architecture of a model (list)

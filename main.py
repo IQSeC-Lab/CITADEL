@@ -1,5 +1,6 @@
 from distutils import core
 import os
+import random
 
 import datetime as dt
 import logging
@@ -21,6 +22,7 @@ from joblib import dump
 import utils
 from models import SimpleEncClassifier, MLPClassifier
 from train import train_encoder, train_classifier
+from similarity_score import Similarity
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -61,7 +63,7 @@ def main():
         
     train_families = set(all_train_family)
     logging.info(f"Number of y_train_family = {len(y_train_family)}")
-    logging.info(f"Count of y_train_family = {Count(y_train_family)}")
+    logging.info(f"Count of y_train_family = {Counter(y_train_family)}")
     logging.info(f'All train family = {all_train_family}')
 
     """
@@ -114,6 +116,12 @@ def main():
     BIN_NUM_CLASSES = 2
 
 
+    # get the labeled and unlabeled indices
+    labeled_indices, unlabeled_indices = utils.get_labeled_unlabeled_indices(X_train, y_train, percentage_labeled=50)
+    logging.info(f'Number of labeled indices: {len(labeled_indices)}')
+    logging.info(f'Number of unlabeled indices: {len(unlabeled_indices)}')
+
+
     """
     Step (3): Train the encoder model.
     `encoder` needs to have the same APIs.
@@ -160,9 +168,22 @@ def main():
     ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_.pth')
     logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
 
-    X_train_final = X_train
-    y_train_final = y_train
-    y_train_binary_final = y_train_binary
+    if args.ssl == True and args.split_train == True:
+        X_train_final = X_train[labeled_indices]
+        y_train_final = y_train[labeled_indices]
+        y_train_binary_final = y_train_binary[labeled_indices]
+
+        X_unlabeled = X_train[unlabeled_indices]
+        # y_unlabeled = y_train[unlabeled_indices]
+        # y_unlabeled_binary = y_train_binary[unlabeled_indices]
+        logging.info(f'Splitted Labeled X_train_final.shape: {X_train_final.shape}')
+        logging.info(f'Splitted Labeled y_train_final.shape: {y_train_final.shape}')
+        
+    else:
+        X_train_final = X_train
+        y_train_final = y_train
+        y_train_binary_final = y_train_binary
+
     upsample_values = None
     
     logging.info(f'upsample_values {upsample_values}')
@@ -192,9 +213,14 @@ def main():
     if args.encoder in ['enc', 'simple-enc-mlp']:
         if not os.path.exists(ENC_MODEL_PATH): # or args.retrain_first == True
             s1 = time.time()
-            train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
-                                optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
-                                save_snapshot = args.snapshot)
+            if args.ssl == True:
+                train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
+                                    optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
+                                    save_snapshot = args.snapshot, X_unlabeled = X_unlabeled)
+            else:
+                train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
+                                    optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
+                                    save_snapshot = args.snapshot)
             e1 = time.time()
             logging.info(f'Training Encoder model time: {(e1 - s1):.3f} seconds')
             
@@ -230,7 +256,10 @@ def main():
     else:
         # args.cls_feat == 'input'
         X_train_feat = X_train
+    X_train_feat = X_train
+    logging.info(f'X_train_feat.shape: {X_train_feat.shape}')
 
+    
     if args.classifier in ['simple-enc-mlp'] or args.classifier == args.encoder:
         # we have already trained it as the sample selection model.
         classifier = encoder
@@ -243,6 +272,30 @@ def main():
         else:
             raise Exception(f'Different classifier and encoder is not implemented yet')
         cls_gpu = True
+    
+    
+
+    """
+    For semi supervised learning
+    """
+    # if args.ssl == True:
+        # here, we can use our own pseudo labeling method
+        # pseudo_indices, pseudo_labels = similarity.get_highly_similar_samples(X_train_feat, X_test_accum_feat, y_test_pred, \
+        #                                                 feature_labels=y_test_binary, batch_size=args.bsize, n_sample=200)
+        # this pseudo_labels is just considering confidence score
+        # X_pseudo, y_pseudo = utils.generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9)
+
+        # add the pseudo samples to the training set
+        # X_train_final = np.concatenate((X_train_final, X_pseudo), axis=0)
+        # y_train_final = np.concatenate((y_train_final, y_pseudo), axis=0)
+        # y_train_binary_final = np.array([1 if item != 0 else 0 for item in y_train_final])
+
+
+
+
+
+    
+    
     # saving the results
 
     fout = open(args.result, 'w')
@@ -259,7 +312,7 @@ def main():
     sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation.csv', 'w')
     sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
     sample_explanation.flush()
-    # logging.info(f'Run complete.')
+    logging.info(f'1st step running complete.')
 
 
     
@@ -275,6 +328,10 @@ def main():
     month_loop_cnt = 0
     prev_train_size = X_train.shape[0]
     cur_sample_indices = []
+    pseudo_samples = []
+    if args.encoder != None:
+        NEW_ENC_MODEL_PATH = ENC_MODEL_PATH.split('.pth')[0] + f'_retrain_.pth'
+
 
     # active learning loop
     while cur_month <= end_date:
@@ -291,8 +348,8 @@ def main():
 
         test_families = set(all_test_family)
         logging.info(f"Number of y_test_family = {len(y_test_family)}")
-        logging.info(f"Count of y_test_family = {Count(y_test_family)}")
-        logging.info(f'All test family = {all_test_family}')
+        #logging.info(f"Count of y_test_family = {Counter(y_test_family)}")
+        #logging.info(f'All test family = {all_test_family}')
         counted_test_labels = Counter(y_test)
         logging.info(f'Loaded X_test: {X_test.shape}, {y_test.shape}')
         logging.info(f'y_test labels: {np.unique(y_test)}')
@@ -314,10 +371,12 @@ def main():
             X_test_feat = X_test_encoded
         else:
             X_test_feat = X_test
-
+        
+        X_test_feat = X_test ### check this line, later needed to remove
+        
         # Only month_loop_cnt == 0 will we update the accum data with new month data
         if args.accumulate_data == True and month_loop_cnt == 0:
-            if cur_month_str == '2013-01':
+            if cur_month_str == args.test_start:
                 X_test_accum = X_test
                 y_test_accum = y_test
                 all_test_family_accum = all_test_family
@@ -345,7 +404,7 @@ def main():
 
 
         if args.accumulate_data == True and month_loop_cnt == 0:
-            if cur_month_str == '2013-01':
+            if cur_month_str == args.test_start: # for api_graph_dataset, it would be '2013-01'
                 y_test_pred_accum = y_test_pred
             else:
                 y_test_pred_accum = np.concatenate((y_test_pred_accum, y_test_pred), axis=0)
@@ -354,45 +413,160 @@ def main():
         
 
 
-        """
-        Step (5): Psuedo labeling and sample selection
-        """
+        # """
+        # Step (5): Psuedo labeling and sample selection
+        # # if args.pseudolabel == True:
+        # """
+        # if args.pseudolabel == True:
+        #     # Train and Test Resprentation Similiarity Score Calculation
+        #     similarity = Similarity()
+        #     # Here, we are calculating the top K=5 similar indices
+        #     # topk_sim_weight, topk_sim_indices = similarity.topk_similar(5, X_test_feat, X_train_feat)
+        #     # # print("Top K similar Weights: ", topk_sim_weight)
+        #     # print("Top K similar Indices: ", topk_sim_indices)
 
+        #     # pseudo_labels, topk_info = similarity.get_majority_label(topk_sim_weight, topk_sim_indices, \
+        #     #                                             feature_labels=y_train_binary, batch_size=args.bsize)
 
+        #     # print("Pesudo Labels shape: ", pseudo_labels.shape)
+        #     # print("Topk_info shape: ", topk_info.shape)
 
-        """
-        Step (6): Expand or Update the training set.
-        """
+        #     # Sample Selection
+        #     # Here, we will be selecting the samples based on the high confidence scores
+        #     # similarity.get_high_confidence_samples are not implemented yet
+        #     # pseudo_indices, pseudo_labels = similarity.get_highly_similar_samples(X_train_feat, X_test_accum_feat, y_test_pred, \
+        #     #                                                 feature_labels=y_test_binary, batch_size=args.bsize, n_sample=200)
+            
+        #     pseudo_indices = random.sample(range(0, X_test_accum_feat.shape[0]), 200)
+        #     pseudo_labels = y_test_pred[pseudo_indices]
+        #     #pseudo_indices, pseudo_labels = 
+            
+        #     print("Pseudo Indices shape: ", pseudo_indices.shape)
+        #     print("Pseudo Labels shape: ", pseudo_labels.shape)
+        #     print("Pseudo Labels: ", pseudo_labels)
+            
+        # """
+        # Step (6): Expand or Update the selected pseudo sample for SSL training.
+        # """
+        # if args.accumulate_data == True and month_loop_cnt == 0:
+        #     if cur_month_str == args.test_start:
+        #         X_pseudo_test_accum = X_test_accum[pseudo_indices]
+        #         y_pseudo_test_accum = pseudo_labels  # here, we didn't add y_test[] which are actual labels annotated by the malware analyst
+        #         all_pseudo_test_family_accum = all_test_family_accum[pseudo_indices]
+        #         X_pseudo_test_accum_feat = X_test_accum_feat[pseudo_indices] # for the classifier
+        #     else:
+        #         X_pseudo_test_accum = np.concatenate((X_pseudo_test_accum, X_test_accum[pseudo_indices]), axis=0)
+        #         y_pseudo_test_accum = np.concatenate((y_pseudo_test_accum, pseudo_labels), axis=0) 
+        #         all_test_family_accum = np.concatenate((all_test_family_accum, all_test_family_accum[pseudo_indices]), axis=0)
+        #         X_pseudo_test_accum_feat = np.concatenate((X_pseudo_test_accum_feat, X_test_accum_feat[pseudo_indices]), axis=0) # for the classifier
+        # elif month_loop_cnt == 0:
+        #     X_pseudo_test_accum = X_test_accum[pseudo_indices]
+        #     y_test_accum = pseudo_labels  # here, we didn't add y_test[] which are actual labels annotated by the malware analyst
+        #     all_test_family_accum = all_test_family_accum[pseudo_indices]
+        #     X_pseudo_test_accum_feat = X_test_accum_feat[pseudo_indices] # for the classifier
 
-
-
-
-        """
-        Step (7): Train the classifier model.
-        """
-
-
-
-
-        """
         
-        """
+
+        # #X_train = np.concatenate((X_train, X_test_accum[pseudo_indices]), axis=0)
+        # #y_train_binary = np.concatenate((y_train_binary, pseudo_labels), axis=0)
+        # X_pseudo_test_accum_tensor = torch.from_numpy(X_pseudo_test_accum).float()
+        # y_pseudo_test_accum_tensor = torch.from_numpy(y_pseudo_test_accum).type(torch.int64)
+        # y_pseudo_binary_cat_tensor = torch.from_numpy(to_categorical(y_pseudo_test_accum)).float()
+        # labeled_families = ['benign' if label == 0 else 'malware' for i, label in enumerate(pseudo_labels)]
+        # original_y = np.array(labeled_families)
+
+        # """
+        # Now, we will deleted the pseudo samples from the accummulated test set
+        # """
+        #  # Remove selected samples from test data
+        # X_test_accum = np.delete(X_test_accum, pseudo_indices, axis=0)
+        # X_test_accum_feat = np.delete(X_test_accum_feat, pseudo_indices, axis=0)
+        # y_test_accum = np.delete(y_test_accum, pseudo_indices, axis=0)
+        # all_test_family_accum = np.delete(all_test_family_accum, pseudo_indices, axis=0)
+        # y_test_pred_accum = np.delete(y_test_pred_accum, pseudo_indices, axis=0)
 
 
+        # X_train_final = X_train
+        # y_train_final = y_train
+        # y_train_binary_final = y_train_binary
+        # upsample_values = None
+
+        # logging.info(f'upsample_values {upsample_values}')
+        # logging.info(f'X_train_final.shape: {X_train_final.shape}')
+        # logging.info(f'y_train_final.shape: {y_train_final.shape}')
+        # logging.info(f'y_train_binary_final.shape: {y_train_binary_final.shape}')
+        # logging.info(f'y_train_final labels: {np.unique(y_train_final)}')
+        # logging.info(f'y_train_final: {Counter(y_train_final)}')
+
+        # pseudo_data = TensorDataset(X_pseudo_test_accum_tensor, y_pseudo_test_accum_tensor, y_pseudo_binary_cat_tensor)
+        # pseudo_loader = DataLoader(pseudo_data, batch_size=args.bsize, shuffle=True)
+        # """
+        # Step (7): Train the classifier model.
+        # """
+        # if args.encoder_retrain == True:
+        #     if args.al_optimizer == None:
+        #         # use the same optimizer as the first model
+        #         logging.info(f'Active learning using optimizer {args.optimizer}')
+        #         pass
+        #     elif args.al_optimizer == 'adam':
+        #         # Adam optimizer
+        #         optimizer_func = torch.optim.Adam
+        #         logging.info(f'Active learning using optimizer {args.al_optimizer}')
+        #     elif args.al_optimizer == 'sgd':
+        #         # SGD optimizer
+        #         optimizer_func = torch.optim.SGD
+        #         logging.info(f'Active learning using optimizer {args.al_optimizer}')
+
+        #     # warm start learning rate, e.g., 0.1 * args.learning_rate
+        #     optimizer = optimizer_func(encoder.parameters(), lr=args.warm_learning_rate)
+        #     al_total_epochs = args.al_epochs
 
 
+        #     s2 = time.time()
+        #     logging.info('Training Encoder model...')
+        #     train_encoder_func(args, encoder, X_train_final, y_train_final, y_train_binary_final,
+        #                     optimizer, al_total_epochs, NEW_ENC_MODEL_PATH,
+        #                     weight = None,
+        #                     adjust = True, warm = not args.cold_start, save_best_loss = False, pseudo_loader = pseudo_loader)
+        #     e2 = time.time()
+        #     logging.info(f'Training Encoder model time: {(e2 - s2):.3f} seconds')
 
+        # if args.cls_feat == 'encoded':
+        #     X_train_tensor = torch.from_numpy(X_train).float()
+        #     if torch.cuda.is_available():
+        #         X_train_tensor = X_train_tensor.cuda()
+        #         X_feat_tensor = encoder.cuda().encode(X_train_tensor)
+        #         X_train_feat = X_feat_tensor.cpu().detach().numpy()
+        #     else:
+        #         X_train_feat = encoder.encode(X_train_tensor).numpy()
+        # else:
+        #     # args.cls_feat == 'input'
+        #     X_train_feat = X_train
 
+        # if args.classifier in ['simple-enc-mlp'] or args.classifier == args.encoder:
+        #     logging.info('Classifier model is the same as the encoder...')
+        #     NEW_CLS_MODEL_PATH = NEW_ENC_MODEL_PATH
 
-    """
-    
-        uncertainty sampling
+        # """
         
-        implementation of coreset replay if we find it useful
+        # """
 
-        expanding the training set
 
-    """
+
+
+
+
+        prev_train_size = X_train.shape[0]
+        # increment to next month
+        cur_month += relativedelta(months=1)
+        """
+            uncertainty sampling
+            
+            implementation of coreset replay
+
+            expanding the training set
+
+        """
     
     # finish writing the result file
     fout.close()

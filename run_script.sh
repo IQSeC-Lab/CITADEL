@@ -10,6 +10,8 @@ WLR=0.00015
 WE=100
 DATA=/home/mhaque3/myDir/data/gen_apigraph_drebin
 #DATA=/home/mhaque3/myDir/data/gen_androzoo_drebin
+# --ssl                                            \
+#--pseudolabel                                   \
 TRAIN_START=2012-01
 TRAIN_END=2012-12
 TEST_START=2013-01
@@ -22,7 +24,8 @@ CNT=200
 modeldim="512-384-256-128"
 S='half'
 B=1024
-LOSS='hi-dist-xent'
+#LOSS='hi-dist-xent'
+LOSS='ssl-loss'
 TS=$(date "+%m.%d-%H.%M.%S")
 
 python -u main.py	                                \
@@ -46,6 +49,13 @@ python -u main.py	                                \
             --lr_decay_rate ${DECAY}                        \
             --lr_decay_epochs [10,500,10]                   \
             --xent-lambda 100                               \
+            --warm_learning_rate ${WLR}                     \
+            --al_epochs ${WE}                               \
+            --al                                            \
+            --ssl                                           \
+            --split-train                                   \
+            --encoder-retrain                               \
+            --al_optimizer ${AL_OPT}                        \
             --loss_func ${LOSS}                             \
             --warm_learning_rate ${WLR}                     \
             --display-interval 180                          \

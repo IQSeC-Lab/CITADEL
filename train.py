@@ -10,10 +10,11 @@ from pytorch_metric_learning.samplers import MPerClassSampler
 
 from common import to_categorical
 from losses import TripletMSELoss
-from losses import HiDistanceXentLoss
+from losses import HiDistanceXentLoss, SSL_Loss
 from samplers import ProportionalClassSampler
 from samplers import HalfSampler
 from samplers import TripletSampler
+import utils
 from utils import AverageMeter
 from utils import save_model
 from utils import adjust_learning_rate
@@ -178,12 +179,16 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
                 weight = None, upsample = None, adjust = False, warm = False,
                 save_best_loss = False,
                 save_snapshot = False,
-                pl_pretrain = False):
+                pl_pretrain = False, X_unlabeled=None): ### need to pass pseudo_loader here or pseudo samples with labels
     # construct the dataset loader
     # y_train is multi-class, y_train_binary is binary class
     X_train_tensor = torch.from_numpy(X_train).float()
     y_train_tensor = torch.from_numpy(y_train).type(torch.int64)
     y_train_binary_cat_tensor = torch.from_numpy(to_categorical(y_train_binary)).float()
+
+    if X_unlabeled is not None:
+        X_unlabeled_tensor = torch.from_numpy(X_unlabeled).float()
+
     if weight is None:
         weight_tensor = torch.ones(X_train.shape[0])
     else:
@@ -212,6 +217,7 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
     else:
         raise Exception(f'Sampler {args.sampler} not implemented yet.')
     best_loss = np.inf
+    pseudo_loader = None
     for epoch in range(1, total_epochs + 1):
         if adjust == True:
             # only adjust learning rate when training the initial model.
@@ -225,11 +231,19 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
         # train one epoch
         time1 = time.time()
         if pl_pretrain == False:
-            loss = train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
+            loss = train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch, pseudo_loader)
         else:
             loss = pl_train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
         time2 = time.time()
         logging.info('epoch {}, b {}, lr {}, loss {}, total time {:.2f}'.format(epoch, bsize, new_lr, loss, time2 - time1))
+
+        
+        if args.ssl == True and X_unlabeled is not None:
+            logging.info(f'epoch {epoch}: Generating pseudo labels...')
+            X_pseudo, y_pseudo = utils.generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9)
+            if X_pseudo.size(0) > 0 and y_pseudo.size(0) > 0:
+                pseudo_data = TensorDataset(X_pseudo, y_pseudo)
+                pseudo_loader = DataLoader(dataset=pseudo_data, batch_size=bsize, shuffle=True)
 
         if epoch >= total_epochs - 10:
             if save_best_loss == True:
@@ -244,7 +258,7 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
             save_model(encoder, optimizer, args, args.epochs, save_path)
     return
 
-def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
+def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch, pseudo_loader=None): # pseudo_loader can be added here
     """ Train one epoch for the model """
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -254,6 +268,7 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
     xent_losses = AverageMeter()
     xent_multi_losses = AverageMeter()
     xent_bin_losses = AverageMeter()
+    pseudo_losses = AverageMeter()
     end = time.time()
 
     device = (torch.device('cuda')
@@ -269,6 +284,7 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
         y_batch = y_batch.to(device)
         y_bin_batch = y_bin_batch.to(device)
         weight_batch = weight_batch.to(device)
+
 
         # DEBUG
         # logging.debug(Counter(y_batch.cpu().detach().numpy()))
@@ -353,6 +369,94 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
                     data_time=data_time, loss=losses, supcon=supcon_losses,
                     xent=xent_losses))
 
+        elif args.loss_func == 'xent-multi':
+            _, features, y_pred = encoder(x_batch)
+            xent_loss = F.cross_entropy(y_pred, y_batch, reduction = 'none')
+            loss = torch.sum(xent_loss * weight_batch) / bsz
+
+            # update metric
+            losses.update(loss.item(), bsz)
+            xent_multi_losses.update(xent_loss.mean().item(), bsz)
+
+            # SGD
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            # print info, print every display_interval batches.
+            if (idx + 1) % args.display_interval == 0:
+                logging.info('Train: [{0}][{1}/{2}]\t'
+                    'BT {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                    'DT {data_time.val:.3f} ({data_time.avg:.3f})  '
+                    'loss {loss.val:.4f} ({loss.avg:.4f})  '
+                    'xent {xent.val:.4f} ({xent.avg:.4f})'.format(
+                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, xent=xent_multi_losses))
+        
+        elif args.loss_func == 'ssl-loss':
+            _, cur_f, y_pred = encoder(x_batch)
+        
+            # features: hidden vector of shape [bsz, n_feature_dim].
+            features = cur_f
+
+            # Our own version of the supervised contrastive learning loss
+            HiDistanceXent = HiDistanceXentLoss().cuda()
+            loss, supcon_loss, xent_loss = HiDistanceXent(args.xent_lambda, \
+                                            y_pred, y_bin_batch, \
+                                            features, labels = y_batch, \
+                                            margin = args.margin, \
+                                            weight = weight_batch)
+            #logging.info(f'loss {loss}, supcon_loss {supcon_loss}, xent_loss {xent_loss}')
+            # calculating for pseudo loss
+            pseudo_loss = 0
+            pseudo_count = 0
+            if pseudo_loader is not None:
+                for idx, (x_pseudo, y_pseudo) in enumerate(pseudo_loader):
+                    x_pseudo = x_pseudo.to(device)
+                    y_pseudo = y_pseudo.to(device)
+                    _, pseudo_features, pseudo_preds = encoder(x_pseudo)
+                    
+                    # Our own version of the supervised contrastive learning loss
+                    ssl_loss = SSL_Loss().cuda()
+                    pseudo_batch_loss = ssl_loss(pseudo_preds=pseudo_preds, pseudo_labels=y_pseudo)
+                    pseudo_loss += pseudo_batch_loss
+                    pseudo_count += 1
+                pseudo_loss = pseudo_loss / pseudo_count
+                #logging.info(f'pseudo_loss {pseudo_loss}')
+                loss += pseudo_loss
+                #logging.info(f'Combined loss {loss}')
+                    
+                    # update metric
+            losses.update(loss.item(), bsz)
+            supcon_losses.update(supcon_loss.item(), bsz)
+            xent_losses.update(xent_loss.item(), bsz)
+            #pseudo_losses.update(pseudo_loss.item(), bsz)
+
+            # SGD
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            # print info, print every display_interval batches.
+            if (idx + 1) % args.display_interval == 0:
+                logging.info('Train: [{0}][{1}/{2}]\t'
+                    'BT {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                    'DT {data_time.val:.3f} ({data_time.avg:.3f})  '
+                    'loss {loss.val:.5f} ({loss.avg:.5f})  '
+                    'hidist {supcon.val:.5f} ({supcon.avg:.5f})  '
+                    'xent {xent.val:.5f} ({xent.avg:.5f}) '.format(
+                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, supcon=supcon_losses,
+                    xent=xent_losses))
+        
         else:
             raise Exception(f'The loss function {args.loss_func} for model ' \
                 f'{args.encoder} is not supported yet.')
