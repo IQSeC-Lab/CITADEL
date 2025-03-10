@@ -220,7 +220,7 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
     return df
 
 def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
-                              X_test_feat, y_test_binary, sm_fn='euclidean', K=5, num_samples=50):
+                              X_test_feat, sm_fn='euclidean', K=5, num_samples=50):
     
     topk_sim_weight, topk_sim_indices, max_sim, avg_sim = Similarity().topk_similar(K, sm_fn, X_test_feat, X_train_feat)
 
@@ -233,12 +233,12 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
     logging.info("Topk_info shape: %s", topk_info.shape)
     logging.info("Pseudo Labeling for Acutal Datasets ended")
-    logging.info("Actual Labels shape: %s", y_test_binary.shape)
+    # logging.info("Actual Labels shape: %s", y_test_binary.shape)
 
     max_sim = max_sim.numpy().reshape(-1, 1)
-    avg_sim = avg_sim.numpy().reshape(-1, 1)
+    # avg_sim = avg_sim.numpy().reshape(-1, 1)
 
-    concatenated_array = np.concatenate((pseudo_labels, y_test_binary, max_sim, avg_sim, topk_info), axis=1)
+    concatenated_array = np.concatenate((pseudo_labels, max_sim, topk_info), axis=1)
     logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
     df = pd.DataFrame(concatenated_array)
@@ -246,7 +246,9 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     df.insert(0, '', df.index)
 
     # Sort the DataFrame based on the 5th column (index 4) in descending order
-    df_sorted = df.sort_values(by=df.columns[4], ascending=False)
+    # Sorting desending order based on the Highest Similarity Score
+    # Column 2 contains the Max Similarity values
+    df_sorted = df.sort_values(by=df.columns[2], ascending=False)
     # Add a new column for original indices before the first column
 
     # Take the top num_samples rows while keeping the original indices
@@ -255,9 +257,9 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     logging.info("Top Samples Shape: %s", df_top_samples.shape)
 
     # Print the last K columns of the first row
-    logging.info("First row data: %s", df_top_samples.iloc[0, 6:].tolist())
+    logging.info("First row data: %s", df_top_samples.iloc[0, (K+1):].tolist())
 
-    samples = [df_top_samples.iloc[i, 6:].tolist() for i in range(df_top_samples.shape[0])]
+    samples = [df_top_samples.iloc[i, (K+1):].tolist() for i in range(df_top_samples.shape[0])]
  
     # Extract the family based on the maximum similarity score among the tuples
     families = []
@@ -348,10 +350,10 @@ if __name__ == "__main__":
     if args.single_checkpoint:
         logging.info("----------------[Single Check Point]---------------------", )
         args.pretrined_model = f'{model_parent_path}{args.learning_rate}_{args.optimizer}_Final.pth'
-        X_train_feat, y_train_binary, all_train_family, X_test_feat, y_test_binary = get_train_test_reprentation(args)
+        X_train_feat, y_train_binary, all_train_family, X_test_feat, _ = get_train_test_reprentation(args)
         
         indices, pseudo_labels, families = get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
-                              X_test_feat, y_test_binary, sm_fn='euclidean', K=5, num_samples=50)
+                              X_test_feat, sm_fn='euclidean', K=5, num_samples=50)
         
         logging.info("-------[Test indices: %s], [Pseudo Label: %s], [Family: %s]",\
                       indices, pseudo_labels, families)
