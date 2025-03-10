@@ -222,7 +222,7 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
 def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
                               X_test_feat, sm_fn='euclidean', K=5, num_samples=50):
     
-    topk_sim_weight, topk_sim_indices, max_sim, avg_sim = Similarity().topk_similar(K, sm_fn, X_test_feat, X_train_feat)
+    topk_sim_weight, topk_sim_indices, max_sim, _ = Similarity().topk_similar(K, sm_fn, X_test_feat, X_train_feat)
 
     logging.info("Top K similar Indices: %s", topk_sim_indices)
 
