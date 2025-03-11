@@ -3,12 +3,13 @@ import torch
 import torch.nn as nn
 
 class TripletLoss(nn.Module):
-    def __init__(self, reduce = 'mean'):
+    def __init__(self, device, reduce = 'mean'):
         """
         If reduce == False, we calculate sample loss, instead of batch loss.
         """
         super(TripletLoss, self).__init__()
         self.reduce = reduce
+        self.device = device
 
     def forward(self, features, labels = None, margin = 10.0,
                 weight = None, split = None):
@@ -23,9 +24,9 @@ class TripletLoss(nn.Module):
         Returns:
             A loss scalar.
         """
-        device = (torch.device('cuda')
-                  if features.is_cuda
-                  else torch.device('cpu'))
+        # device = (self.device
+        #           if features.is_cuda
+        #           else torch.device('cpu'))
         
         batch_size = features.shape[0]
 
@@ -57,10 +58,11 @@ class TripletLoss(nn.Module):
         return loss
 
 class TripletMSELoss(nn.Module):
-    def __init__(self, reduce = 'mean'):
+    def __init__(self, device, reduce = 'mean'):
         super(TripletMSELoss, self).__init__()
         # reduce: whether use 'mean' reduction or keep sample loss
         self.reduce = reduce
+        self.device = device
 
     def forward(self, cae_lambda,
             x, x_prime,
@@ -80,26 +82,27 @@ class TripletMSELoss(nn.Module):
         Returns:
             A loss scalar.
         """
-        Triplet = TripletLoss(reduce = self.reduce)
+        Triplet = TripletLoss(device = self.device, reduce = self.reduce)
         supcon_loss = Triplet(features, labels = labels, margin = margin, weight = weight, split = split)
 
         mse_loss = torch.nn.functional.mse_loss(x, x_prime, reduction = self.reduce)
         
         loss = cae_lambda * supcon_loss + mse_loss
         
-        del Triplet
-        torch.cuda.empty_cache()
+        # del Triplet
+        # torch.cuda.empty_cache()
 
         return loss, supcon_loss, mse_loss
 
 class HiDistanceLoss(nn.Module):
-    def __init__(self, reduce = 'mean', sample_reduce='mean'):
+    def __init__(self, device, reduce = 'mean', sample_reduce='mean'):
         """
         If reduce == False, we calculate sample loss, instead of batch loss.
         """
         super(HiDistanceLoss, self).__init__()
         self.reduce = reduce
         self.sample_reduce = sample_reduce
+        self.device = device
 
     def forward(self, features, binary_cat_labels, labels = None, margin = 10.0,
                 weight = None, split = None):
@@ -116,9 +119,7 @@ class HiDistanceLoss(nn.Module):
         Returns:
             A loss scalar.
         """
-        device = (torch.device('cuda')
-                  if features.is_cuda
-                  else torch.device('cpu'))
+        device = self.device
 
         if labels == None:
             raise ValueError('Need to define labels in DistanceLoss')
@@ -277,11 +278,12 @@ class HiDistanceLoss(nn.Module):
         return loss
 
 class HiDistanceXentLoss(nn.Module):
-    def __init__(self, reduce = 'mean', sample_reduce = 'mean'):
+    def __init__(self, device, reduce = 'mean', sample_reduce = 'mean'):
         super(HiDistanceXentLoss, self).__init__()
         # reduce: whether use 'mean' reduction or keep sample loss
         self.reduce = reduce
         self.sample_reduce = sample_reduce
+        self.device = device
 
     def forward(self, xent_lambda,
             y_bin_pred, y_bin_batch,
@@ -302,7 +304,7 @@ class HiDistanceXentLoss(nn.Module):
         Returns:
             A loss scalar.
         """
-        Dist = HiDistanceLoss(reduce = self.reduce, sample_reduce = self.sample_reduce)
+        Dist = HiDistanceLoss(device=self.device, reduce = self.reduce, sample_reduce = self.sample_reduce)
         # try not giving any weight to HiDistanceLoss
         supcon_loss = Dist(features, y_bin_batch, labels = labels, margin = margin, weight = None, split = split)
         
@@ -314,7 +316,7 @@ class HiDistanceXentLoss(nn.Module):
 
         loss = supcon_loss + xent_lambda * xent_bin_loss
         
-        del Dist
-        torch.cuda.empty_cache()
+        # del Dist
+        # torch.cuda.empty_cache()
 
         return loss, supcon_loss, xent_bin_loss

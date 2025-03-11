@@ -68,6 +68,7 @@ class SimpleEncClassifier(nn.Module):
         return
 
     def forward(self, x):
+        # x = x.view(x.size(0), -1)  # Flatten the input tensor if necessary
         self.encoded = self.encoder_model(x)
         self.out = self.mlp_model(self.encoded)
         return self.encoded, self.encoded, self.out
@@ -77,6 +78,7 @@ class SimpleEncClassifier(nn.Module):
         return mlp_out
     
     def predict(self, x):
+        # x = x.view(x.size(0), -1)  # Flatten the input tensor if necessary
         self.encoded = self.encoder_model(x)
         self.out = self.mlp_model(self.encoded)
         preds = self.out.max(1)[1]

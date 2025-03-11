@@ -200,23 +200,14 @@ def evaluate_valid_test_data(args, encoder, end_date, X_data, y_data, all_data_f
     y_data_binary = np.array([1 if item != 0 else 0 for item in y_data])
 
     # prepare X_feat and X_feat_tensor if they are embeddings
-    if args.cls_feat == 'encoded':
-        X_data_tensor = torch.from_numpy(X_data).float()
-        if torch.cuda.is_available():
-            X_data_tensor = X_data_tensor.cuda()
-            X_feat_tensor_valid = encoder.cuda().encode(X_data_tensor)
-            X_data_feat = X_feat_tensor_valid.cpu().detach().numpy()
-        else:
-            X_data_feat = encoder.encode(X_data_tensor).numpy()
-    else:
-        # args.cls_feat == 'input'
-        X_data_feat = X_data
+    X_data_feat = get_train_feat(args, encoder, X_data)
 
     utils.eval_classifier(args, encoder, end_date, X_data_feat, y_data_binary, all_data_family, data_families, \
                     fout, fam_out, stat_out, gpu = cls_gpu, multi = eval_multi)
 
 
-def get_new_train_data(df, X_train_feat, y_train, y_train_binary, X_test, y_test, y_test_binary):
+def get_new_train_data(df, X_train_feat, y_train, y_train_binary, all_train_family,\
+                        X_test, y_test, y_test_binary, all_test_family):
     logging.info(f'Test data pseudo label info: {df.head(10)}')
     logging.info(f'Pseudo labeling for Test data Ended.')
     logging.info(f'Sample selection Started.....')
@@ -230,32 +221,39 @@ def get_new_train_data(df, X_train_feat, y_train, y_train_binary, X_test, y_test
     selected_X_test_feat = X_test[selected_indices]
     selected_y_test = y_test[selected_indices]
     selected_y_test_binary = y_test_binary[selected_indices]
+    selected_all_test_families = all_test_family[selected_indices]
+
     logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
 
     # Merge the selected test samples with the training data
     X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
     y_train = np.concatenate((y_train, selected_y_test), axis=0)
     y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
+    all_train_family = np.concatenate((all_train_family, selected_all_test_families), axis=0)
+
     logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
     logging.info(f'Updated y_train shape: {y_train.shape}')
     logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
+    logging.info(f'Updated all_train_family shape: {all_train_family.shape}')
     
-    return X_train_feat, y_train, y_train_binary
+    return X_train_feat, y_train, y_train_binary, all_train_family
 
-def get_train_feat(args, encoder, X_train):
+def get_train_feat(args, encoder, X_data):
+    device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
+    encoder.to(device)
     if args.cls_feat == 'encoded':
-        X_train_tensor = torch.from_numpy(X_train).float()
+        X_data_tensor = torch.from_numpy(X_data).float()
         if torch.cuda.is_available():
-            X_train_tensor = X_train_tensor.cuda()
-            X_feat_tensor = encoder.cuda().encode(X_train_tensor)
-            X_train_feat = X_feat_tensor.cpu().detach().numpy()
+            X_data_tensor = X_data_tensor.to(device)
+            X_feat_tensor = encoder.encode(X_data_tensor)
+            X_data_feat = X_feat_tensor.cpu().detach().numpy()
         else:
-            X_train_feat = encoder.encode(X_train_tensor).numpy()
+            X_data_feat = encoder.encode(X_data_tensor).numpy()
     else:
         # args.cls_feat == 'input'
-        X_train_feat = X_train
+        X_data_feat = X_data
 
-    return X_train_feat
+    return X_data_feat
 
 def main():
     """
@@ -498,8 +496,9 @@ def main():
                         X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
                             X_test_feat=X_test, y_test_binary=y_test_binary)
 
-        X_train, y_train, y_train_binary = get_new_train_data(df, X_train, y_train, y_train_binary,\
-                                                                    X_test, y_test, y_test_binary)
+        X_train, y_train, y_train_binary, all_train_family = get_new_train_data(df, X_train, y_train,\
+                                                                                y_train_binary, all_train_family,\
+                                                                                X_test, y_test, y_test_binary, all_test_family)
         
         # Train data retraining for Active Learning
         cls_gpu, encoder, classifier, X_train_final, \

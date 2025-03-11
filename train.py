@@ -34,7 +34,7 @@ def pseudo_loss(args, encoder, X_train, y_train, y_train_binary, \
     # y_tensor is used for computing similarity matrix => supcon loss
     y_tensor = torch.from_numpy(y)
     
-    device = (torch.device('cuda')
+    device = (torch.device(args.gpu)
             if torch.cuda.is_available()
             else torch.device('cpu'))
     encoder = encoder.to(device)
@@ -121,7 +121,7 @@ def pseudo_loss_one_epoch(args, encoder, data_loader, sample_num, epoch):
 
     idx = 0
     # average the loss for each index in batch_indices
-    device = (torch.device('cuda')
+    device = (torch.device(args.gpu)
                 if torch.cuda.is_available()
                 else torch.device('cpu'))
     
@@ -135,7 +135,7 @@ def pseudo_loss_one_epoch(args, encoder, data_loader, sample_num, epoch):
         if args.loss_func == 'triplet-mse':
             features, decoded = encoder(x_batch)
 
-            TripletMSE = TripletMSELoss(reduce = args.reduce).to(device)
+            TripletMSE = TripletMSELoss(device = device, reduce = args.reduce).to(device)
             loss, _, _ = TripletMSE(args.cae_lambda, \
                                 x_batch, decoded, features, labels=y_batch, \
                                 margin = args.margin, \
@@ -143,7 +143,7 @@ def pseudo_loss_one_epoch(args, encoder, data_loader, sample_num, epoch):
             loss = loss.to('cpu').detach()
         elif args.loss_func == 'hi-dist-xent':
             _, features, y_pred = encoder(x_batch)
-            HiDistanceXent = HiDistanceXentLoss(reduce = args.reduce).to(device)
+            HiDistanceXent = HiDistanceXentLoss(device = device, reduce = args.reduce).to(device)
             loss, _, _ = HiDistanceXent(args.xent_lambda, 
                                     y_pred, y_bin_batch,
                                     features, labels=y_batch,
@@ -256,7 +256,7 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
     xent_bin_losses = AverageMeter()
     end = time.time()
 
-    device = (torch.device('cuda')
+    device = (torch.device(args.gpu)
                 if torch.cuda.is_available()
                 else torch.device('cpu'))
     encoder = encoder.to(device)
@@ -279,7 +279,7 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
         if args.loss_func == 'triplet-mse':
             features, decoded = encoder(x_batch)
 
-            TripletMSE = TripletMSELoss().cuda()
+            TripletMSE = TripletMSELoss(device=device).to(device)
             loss, supcon_loss, mse_loss = TripletMSE(args.cae_lambda, \
                                 x_batch, decoded, features, labels=y_batch, \
                                 margin = args.margin, \
@@ -320,7 +320,7 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch):
             features = cur_f
 
             # Our own version of the supervised contrastive learning loss
-            HiDistanceXent = HiDistanceXentLoss().cuda()
+            HiDistanceXent = HiDistanceXentLoss(device = device).to(device)
             loss, supcon_loss, xent_loss = HiDistanceXent(args.xent_lambda, \
                                             y_pred, y_bin_batch, \
                                             features, labels = y_batch, \
@@ -427,7 +427,7 @@ def train_classifier_one_epoch(args, classifier, train_loader, optimizer, epoch,
     losses = AverageMeter()
     end = time.time()
 
-    device = (torch.device('cuda')
+    device = (torch.device(args.gpu)
                 if torch.cuda.is_available()
                 else torch.device('cpu'))
     classifier = classifier.to(device)

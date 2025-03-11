@@ -5,7 +5,7 @@ LR=0.003
 OPT=sgd
 SCH=step
 DECAY=0.95
-EPOCHS=250
+EPOCHS=10
 RESULT_EPOCHS=30
 WLR=0.00015
 WE=100
@@ -23,6 +23,7 @@ TEST_END=2018-01
 RESULT_DIR=/home/ihossain/ISMAIL/SSL-malware/results_ours
 AL_OPT=adam
 PRE=False
+GPU=cuda:2
 
 CNT=200
 
@@ -62,6 +63,7 @@ nohup python -u main.py	                                \
             --xent-lambda 100                               \
             --display-interval 180                          \
             --count ${CNT}                                  \
+            --gpu ${GPU}                                    \
             --local_pseudo_loss                             \
             --reduce "none"                                 \
             --sample_reduce 'mean'                          \

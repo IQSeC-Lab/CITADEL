@@ -57,28 +57,28 @@ class Similarity:
     def euclidean_dist(self, A, B, lambda_factor=1.0):
         """Compute Euclidean similarity between vectors A and B."""
         # Compute pairwise Euclidean distances
-        # euclidean_distances = cdist(A, B, metric='euclidean')
+        euclidean_distances = cdist(A, B, metric='euclidean')
+        return torch.tensor(euclidean_distances)
         # return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
 
         # A = torch.randn(3, 10)  # 3 vectors of 10 dimensions
         # B = torch.randn(5, 10)  # 5 vectors of 10 dimensions
         
         # Compute squared norms of A and B
-        A_sq = (A ** 2).sum(dim=1, keepdim=True)  # Shape: (3, 1)
-        B_sq = (B ** 2).sum(dim=1, keepdim=True)  # Shape: (5, 1)
+        # A_sq = (A ** 2).sum(axis=1, keepdims=True)  # Shape: (3, 1)
+        # B_sq = (B ** 2).sum(axis=1, keepdims=True)  # Shape: (5, 1)
         
-        # Compute pairwise squared Euclidean distance using matrix operations
-        pairwise_sq_dist = A_sq - 2 * torch.mm(A, B.T) + B_sq.T  # Shape: (3,5)
+        # # Compute pairwise squared Euclidean distance using matrix operations
+        # pairwise_sq_dist = A_sq - 2 * np.dot(A, B.T) + B_sq.T  # Shape: (3,5)
         
-        # Ensure distances are non-negative due to numerical precision errors
-        pairwise_sq_dist = torch.clamp(pairwise_sq_dist, min=0.0)
+        # # Ensure distances are non-negative due to numerical precision errors
+        # pairwise_sq_dist = np.maximum(pairwise_sq_dist, 0.0)
         
-        # Take square root to get final Euclidean distances
-        # euclidean_distance = torch.sqrt(pairwise_sq_dist)
+        # # Take square root to get final Euclidean distances
+        # # euclidean_distance = np.sqrt(pairwise_sq_dist)
         
-        # print("Optimized Euclidean Distance Matrix:\n", euclidean_distance)
-        print("Shape:", pairwise_sq_dist.shape)
-        return pairwise_sq_dist
+        # print("Shape:", pairwise_sq_dist.shape)
+        # return pairwise_sq_dist
     
     def topk_similar(self, K, sm_fn, feature_matrix1, feature_matrix2):
         # compute cos similarity between each feature vector
@@ -188,6 +188,30 @@ def load_data_and_model(args):
 
     return encoder, X_train, y_train_binary, all_train_family, X_test, y_test_binary, ENC_MODEL_PATH
 
+def get_train_feat(args, encoder, X_train, X_test):
+    device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
+    encoder.to(device)
+    
+    if args.cls_feat == 'encoded':
+        X_train_tensor = torch.from_numpy(X_train).float()
+        X_test_tensor = torch.from_numpy(X_test).float()
+        if torch.cuda.is_available():
+            X_train_tensor = X_train_tensor.to(device)
+            X_feat_tensor = encoder.encode(X_train_tensor)
+            X_train_feat = X_feat_tensor.cpu().detach().numpy()
+
+            X_test_tensor = X_test_tensor.to(device)
+            X_test_feat = encoder.encode(X_test_tensor).cpu().detach().numpy()
+        else:
+            X_train_feat = encoder.encode(X_train_tensor).numpy()
+            X_test_feat = encoder.encode(X_test_tensor).numpy()
+    else:
+        # args.cls_feat == 'input'
+        X_train_feat = X_train
+        X_test_feat = X_test
+
+    return X_train_feat, X_test_feat
+
 def get_train_test_reprentation(args):
 
     logging.info("Pseudo Labeling for Acutal Datasets started")
@@ -199,20 +223,7 @@ def get_train_test_reprentation(args):
     encoder.load_state_dict(state_dict['model'])
     logging.info("Model loading ended!")
 
-    if args.cls_feat == 'encoded':
-        X_train_tensor = torch.from_numpy(X_train).float()
-        X_test_tensor = torch.from_numpy(X_test).float()
-        if torch.cuda.is_available():
-            X_train_tensor = X_train_tensor.cuda()
-            X_feat_tensor = encoder.cuda().encode(X_train_tensor)
-            X_train_feat = X_feat_tensor.cpu().detach().numpy()
-
-            X_test_tensor = X_test_tensor.cuda()
-            X_test_feat = encoder.encode(X_test_tensor).cpu().detach().numpy()
-        else:
-            X_train_feat = encoder.encode(X_train_tensor).numpy()
-    else:
-        X_train_feat = X_train
+    X_train_feat, X_test_feat = get_train_feat(args, encoder, X_train, X_test)
 
     logging.info("X_train_feat Shape: %s", X_train_feat.shape)
     logging.info("X_test_feat Shape: %s", X_test_feat.shape)
@@ -230,11 +241,11 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
 
     logging.info("Top K similar Indices: %s", topk_sim_indices)
 
-    pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
-                                                               feature_labels=y_train_binary)
+    # pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
+    #                                                            feature_labels=y_train_binary)
 
-    logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
-    logging.info("Topk_info shape: %s", topk_info.shape)
+    # logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
+    # logging.info("Topk_info shape: %s", topk_info.shape)
 
     logging.info("Pseudo Labeling for Acutal Datasets ended")
 
@@ -244,7 +255,7 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
     max_sim = max_sim.numpy().reshape(-1, 1)
     avg_sim = avg_sim.numpy().reshape(-1, 1)
 
-    concatenated_array = np.concatenate((pseudo_labels, y_test_binary, max_sim, avg_sim, topk_info), axis=1)
+    concatenated_array = np.concatenate((y_test_binary, max_sim, avg_sim), axis=1)
     logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
     df = pd.DataFrame(concatenated_array, columns=tot_columns)
@@ -286,7 +297,6 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     df_top_samples = df_sorted.head(num_samples)
 
     logging.info("Top Samples Shape: %s", df_top_samples.shape)
-
     # Print the last K columns of the first row
     logging.info("First row data: %s", df_top_samples.iloc[0, (K+1):].tolist())
 
@@ -316,17 +326,18 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
 def pesudo_labeling(args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
                     X_train_feat=None, y_train_binary=None, X_test_feat=None, y_test_binary=None):
 
-    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Max_value', 'Avg_value']
+    # column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Max_value', 'Avg_value']
+    column_names = ['Actual Label', 'Max_value', 'Avg_value']
 
     if is_single_k_sm_fn:
         temp_cols = []
-        for c in range(1, K+1):
-            temp_cols.append(f'Train Point {c}')
-        tot_columns = column_names + temp_cols
-        logging.info("Total logging.infoColumns: %s", tot_columns)
+        # for c in range(1, K+1):
+        #     temp_cols.append(f'Train Point {c}')
+        # tot_columns = column_names + temp_cols
+        # logging.info("Total logging.infoColumns: %s", tot_columns)
 
         return single_k_sm_fn(args, X_train_feat, y_train_binary, \
-                        X_test_feat, y_test_binary, sm_fn, K, tot_columns)
+                        X_test_feat, y_test_binary, sm_fn, K, column_names)
     else:   
         for k in range(1, args.k_closest, 2):
             temp_cols = []

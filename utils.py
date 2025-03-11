@@ -24,6 +24,7 @@ def parse_args():
                     help='whether to print the debugging logs.')
     
     p.add_argument('--bsize', default=1024, type=int, help='Number of images in each mini-batch')
+    p.add_argument('--gpu', default='cuda:0', type=str, help='which gpu is being used.')
 
 
     p.add_argument('--mdate', help='Encoder model date to use.')
@@ -235,11 +236,14 @@ def get_model_dims(model_name, input_layer_num, hidden_layer_num, output_layer_n
 
 def eval_classifier(args, classifier, cur_month_str, X, y_binary, y_family, train_families, \
                         fout, fam_out, stat_out, gpu = False, multi = False):
+    device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
+    classifier.to(device)
+
     if gpu == True:
         X_tensor = torch.from_numpy(X).float()
         if torch.cuda.is_available():
-            X_tensor = X_tensor.cuda()
-            y_pred = classifier.cuda().predict(X_tensor)
+            X_tensor = X_tensor.to(device)
+            y_pred = classifier.predict(X_tensor)
             y_pred = y_pred.cpu().detach().numpy()
         else:
             y_pred = classifier.predict(X_tensor).numpy()
