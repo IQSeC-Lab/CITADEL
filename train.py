@@ -18,6 +18,7 @@ import utils
 from utils import AverageMeter
 from utils import save_model
 from utils import adjust_learning_rate
+from similarity_score import get_high_similar_samples
 
 def pseudo_loss(args, encoder, X_train, y_train, y_train_binary, \
                 X_test, y_test_pred, test_offset, total_epochs):
@@ -179,7 +180,7 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
                 weight = None, upsample = None, adjust = False, warm = False,
                 save_best_loss = False,
                 save_snapshot = False,
-                pl_pretrain = False, X_unlabeled=None): ### need to pass pseudo_loader here or pseudo samples with labels
+                pl_pretrain = False, X_unlabeled=None, pseudo_loader=None): ### need to pass pseudo_loader here or pseudo samples with labels
     # construct the dataset loader
     # y_train is multi-class, y_train_binary is binary class
     X_train_tensor = torch.from_numpy(X_train).float()
@@ -217,7 +218,7 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
     else:
         raise Exception(f'Sampler {args.sampler} not implemented yet.')
     best_loss = np.inf
-    pseudo_loader = None
+    pseudo_loader = pseudo_loader
     for epoch in range(1, total_epochs + 1):
         if adjust == True:
             # only adjust learning rate when training the initial model.
@@ -238,10 +239,17 @@ def train_encoder(args, encoder, X_train, y_train, y_train_binary,
         logging.info('epoch {}, b {}, lr {}, loss {}, total time {:.2f}'.format(epoch, bsize, new_lr, loss, time2 - time1))
 
         
-        if args.ssl == True and X_unlabeled is not None:
+        if args.ssl == True and (X_unlabeled is not None or pseudo_loader is not None): # ✅✅✅
             logging.info(f'epoch {epoch}: Generating pseudo labels...')
-            X_pseudo, y_pseudo = utils.generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9)
-            if X_pseudo.size(0) > 0 and y_pseudo.size(0) > 0:
+            indicies, y_pseudo = get_high_similar_samples(X_train_tensor, y_train_binary_cat_tensor[:, 1], y_train_tensor, \
+                                                          X_unlabeled_tensor, sm_fn='cosine', num_samples=1000)
+            X_pseudo = X_unlabeled_tensor[indicies]
+            y_pseudo = torch.tensor(y_pseudo)
+            # logging.info(f'X_pseudo shape {X_pseudo.shape}, y_pseudo shape {y_pseudo.shape}')
+            # logging.info(f'y_pseudo {y_pseudo}')
+            #_, X_pseudo, y_pseudo = utils.generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9)
+
+            if X_pseudo.shape[0] > 0 and y_pseudo.shape[0] > 0:
                 pseudo_data = TensorDataset(X_pseudo, y_pseudo)
                 pseudo_loader = DataLoader(dataset=pseudo_data, batch_size=bsize, shuffle=True)
 

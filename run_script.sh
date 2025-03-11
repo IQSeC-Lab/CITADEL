@@ -28,7 +28,8 @@ B=1024
 LOSS='ssl-loss'
 TS=$(date "+%m.%d-%H.%M.%S")
 
-python -u main.py	                                \
+#            --al                                            \
+CUDA_VISIBLE_DEVICES=1 nohup python -u main.py	                                \
             --data ${DATA}                                  \
             --mdate 20230501                                \
             --train_start ${TRAIN_START}                    \
@@ -51,7 +52,6 @@ python -u main.py	                                \
             --xent-lambda 100                               \
             --warm_learning_rate ${WLR}                     \
             --al_epochs ${WE}                               \
-            --al                                            \
             --ssl                                           \
             --split-train                                   \
             --encoder-retrain                               \

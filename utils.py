@@ -194,7 +194,7 @@ def generate_pseudo_labels(encoder, X_unlabeled, threshold=0.9):
         confident_indices = confidence > threshold
         X_pseudo = X_unlabeled[confident_indices]
         y_pseudo = pseudo_labels[confident_indices]
-    return X_pseudo, y_pseudo
+    return confident_indices, X_pseudo, y_pseudo
 
 def get_labeled_unlabeled_indices(X_data, y_data, percentage_labeled=10):
     """

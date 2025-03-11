@@ -360,7 +360,7 @@ class SSL_Loss(nn.Module):
             
             # Weight pseudo-labels by prediction confidence
             confidence_weights = self.get_confidence_weights(pseudo_preds)
-            weighted_pseudo_loss = pseudo_loss * confidence_weights
+            weighted_pseudo_loss = pseudo_loss * confidence_weights > 0.9
             
             # Add uncertainty weighting for pseudo-labeled samples
             uncertainty = self.calculate_uncertainty(pseudo_preds)
