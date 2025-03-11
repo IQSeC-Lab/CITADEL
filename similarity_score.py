@@ -57,10 +57,28 @@ class Similarity:
     def euclidean_dist(self, A, B, lambda_factor=1.0):
         """Compute Euclidean similarity between vectors A and B."""
         # Compute pairwise Euclidean distances
-        euclidean_distances = cdist(A, B, metric='euclidean')
-        return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
-    
+        # euclidean_distances = cdist(A, B, metric='euclidean')
+        # return torch.tensor(np.exp(-lambda_factor * euclidean_distances))
 
+        # A = torch.randn(3, 10)  # 3 vectors of 10 dimensions
+        # B = torch.randn(5, 10)  # 5 vectors of 10 dimensions
+        
+        # Compute squared norms of A and B
+        A_sq = (A ** 2).sum(dim=1, keepdim=True)  # Shape: (3, 1)
+        B_sq = (B ** 2).sum(dim=1, keepdim=True)  # Shape: (5, 1)
+        
+        # Compute pairwise squared Euclidean distance using matrix operations
+        pairwise_sq_dist = A_sq - 2 * torch.mm(A, B.T) + B_sq.T  # Shape: (3,5)
+        
+        # Ensure distances are non-negative due to numerical precision errors
+        pairwise_sq_dist = torch.clamp(pairwise_sq_dist, min=0.0)
+        
+        # Take square root to get final Euclidean distances
+        euclidean_distance = torch.sqrt(pairwise_sq_dist)
+        
+        # print("Optimized Euclidean Distance Matrix:\n", euclidean_distance)
+        print("Shape:", euclidean_distance.shape)
+        return euclidean_distance
     
     def topk_similar(self, K, sm_fn, feature_matrix1, feature_matrix2):
         # compute cos similarity between each feature vector
