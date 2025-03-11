@@ -74,11 +74,11 @@ class Similarity:
         pairwise_sq_dist = torch.clamp(pairwise_sq_dist, min=0.0)
         
         # Take square root to get final Euclidean distances
-        euclidean_distance = torch.sqrt(pairwise_sq_dist)
+        # euclidean_distance = torch.sqrt(pairwise_sq_dist)
         
         # print("Optimized Euclidean Distance Matrix:\n", euclidean_distance)
-        print("Shape:", euclidean_distance.shape)
-        return euclidean_distance
+        print("Shape:", pairwise_sq_dist.shape)
+        return pairwise_sq_dist
     
     def topk_similar(self, K, sm_fn, feature_matrix1, feature_matrix2):
         # compute cos similarity between each feature vector
