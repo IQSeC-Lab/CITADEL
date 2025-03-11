@@ -290,28 +290,28 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     # Print the last K columns of the first row
     logging.info("First row data: %s", df_top_samples.iloc[0, (K+1):].tolist())
 
-    samples = [df_top_samples.iloc[i, (K+1):].tolist() for i in range(df_top_samples.shape[0])]
+    # samples = [df_top_samples.iloc[i, (K+1):].tolist() for i in range(df_top_samples.shape[0])]
  
     # Extract the family based on the maximum similarity score among the tuples
-    families = []
-    for row in samples:
-        max_sim_score = -1
-        family = None
-        logging.info("Row: %s", row)
-        for tup in row:
-            _, sim_score, _, fam = eval(tup)
-            # logging.info("Sim Score: %s, Family: %s", sim_score, fam)
-            if sim_score > max_sim_score:
-                max_sim_score = sim_score
-                family = fam
-        families.append(family)
+    # families = []
+    # for row in samples:
+    #     max_sim_score = -1
+    #     family = None
+    #     logging.info("Row: %s", row)
+    #     for tup in row:
+    #         _, sim_score, _, fam = eval(tup)
+    #         # logging.info("Sim Score: %s, Family: %s", sim_score, fam)
+    #         if sim_score > max_sim_score:
+    #             max_sim_score = sim_score
+    #             family = fam
+    #     families.append(family)
 
     #return indices (df_top_samples[:, 0]) of the top samples 
     # and their corresponding pseudo labels (df_top_samples[:, 1])
     indices = df_top_samples.iloc[:, 0].values
     pseudo_labels = df_top_samples.iloc[:, 1].astype(int).values
-    families = np.array(families)
-    return indices, pseudo_labels, families
+    # families = np.array(families)
+    return indices, pseudo_labels
 
 def pesudo_labeling(args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
                     X_train_feat=None, y_train_binary=None, X_test_feat=None, y_test_binary=None):
