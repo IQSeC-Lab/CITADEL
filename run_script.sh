@@ -5,8 +5,8 @@ LR=0.003
 OPT=sgd
 SCH=step
 DECAY=0.95
-EPOCHS=10
-RESULT_EPOCHS=5
+EPOCHS=250
+RESULT_EPOCHS=30
 WLR=0.00015
 WE=100
 # DATA=/home/ihossain/ISMAIL/Datasets/data/gen_androzoo_drebin
@@ -32,7 +32,7 @@ B=1024
 LOSS='hi-dist-xent'
 TS=$(date "+%m.%d-%H.%M.%S")
 
-python -u main.py	                                \
+nohup python -u main.py	                                \
             --data ${DATA}                                  \
             --mdate 20230501                                \
             --epochs ${EPOCHS}                                \
@@ -67,4 +67,4 @@ python -u main.py	                                \
             --sample_reduce 'mean'                          \
             --result ${RESULT_DIR}/gen_apigraph_cnt${CNT}_${TS}.csv \
             --log_path ${RESULT_DIR}/gen_apigraph_cnt${CNT}_${TS}.log \
-            > ${RESULT_DIR}/gen_apigraph_cnt${CNT}_${TS}.log 2>&1
+            > ${RESULT_DIR}/gen_apigraph_cnt${CNT}_${TS}.log 2>&1 &

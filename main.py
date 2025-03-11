@@ -38,37 +38,55 @@ def load_data(data_dir, start_month, end_month):
 
 def prepare_encoder_and_classifier(
         args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
-            NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir):
-
-    cls_gpu = True
-    if args.encoder == None:
-        # We will not use an encoder. The input features are used directly.
-        logging.info('Not using an encoder. Using the input features directly.')
-    elif args.encoder == 'mlp':
-        # assert args.encoder == args.classifier, "mlp encoder is from mlp classifier"
-        if args.multi_class == True:
-            output_dim = len(np.unique(y_train))
-        else:
-            output_dim = BIN_NUM_CLASSES
-        mlp_dims = utils.get_model_dims('MLP', NUM_FEATURES, args.mlp_hidden, output_dim)
-        enc_dims = mlp_dims[:-1]
-        encoder = MLPClassifier(mlp_dims)
-    elif args.encoder == 'cnn':
-        raise Exception(f'The encoder {args.encoder} is not supported yet.')
-        pass
-    elif args.encoder == 'simple-enc-mlp':
-        # Enc + MLP model 
-        enc_dims = utils.get_model_dims('Encoder', NUM_FEATURES,
-                            args.enc_hidden, NUM_CLASSES)
-        mlp_dims = utils.get_model_dims('MLP', enc_dims[-1], args.mlp_hidden, BIN_NUM_CLASSES)
-        encoder = SimpleEncClassifier(enc_dims, mlp_dims)
-        encoder_name = 'simple_enc_classifier'
-    else:
-        raise Exception(f'The encoder {args.encoder} is not supported yet.')
-    
+            NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir, pre_trained=False):
 
     MODEL_DIR = os.path.join(SAVED_MODEL_FOLDER, data_dir)
-    utils.create_folder(MODEL_DIR)
+    if not os.path.exists(MODEL_DIR): # if model directory not exist
+        utils.create_folder(MODEL_DIR)
+        
+    encoder_name = 'simple_enc_classifier'
+    ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_Final.pth')
+    logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
+
+    cls_gpu = True
+    if pre_trained == False:
+        if args.encoder == None:
+            # We will not use an encoder. The input features are used directly.
+            logging.info('Not using an encoder. Using the input features directly.')
+        elif args.encoder == 'mlp':
+            # assert args.encoder == args.classifier, "mlp encoder is from mlp classifier"
+            if args.multi_class == True:
+                output_dim = len(np.unique(y_train))
+            else:
+                output_dim = BIN_NUM_CLASSES
+            mlp_dims = utils.get_model_dims('MLP', NUM_FEATURES, args.mlp_hidden, output_dim)
+            enc_dims = mlp_dims[:-1]
+            encoder = MLPClassifier(mlp_dims)
+        elif args.encoder == 'cnn':
+            raise Exception(f'The encoder {args.encoder} is not supported yet.')
+            pass
+        elif args.encoder == 'simple-enc-mlp':
+            # Enc + MLP model 
+            enc_dims = utils.get_model_dims('Encoder', NUM_FEATURES,
+                                args.enc_hidden, NUM_CLASSES)
+            mlp_dims = utils.get_model_dims('MLP', enc_dims[-1], args.mlp_hidden, BIN_NUM_CLASSES)
+            encoder = SimpleEncClassifier(enc_dims, mlp_dims)
+            # encoder_name = 'simple_enc_classifier'
+        else:
+            raise Exception(f'The encoder {args.encoder} is not supported yet.')
+    else:
+        if args.encoder == 'simple-enc-mlp':
+            enc_dims = utils.get_model_dims('Encoder', NUM_FEATURES, args.enc_hidden, NUM_CLASSES)
+            mlp_dims = utils.get_model_dims('MLP', enc_dims[-1], args.mlp_hidden, BIN_NUM_CLASSES)
+            encoder = SimpleEncClassifier(enc_dims, mlp_dims)
+        # load the pre-trained encoder model
+        logging.info("Model loading started...")
+        state_dict = torch.load(ENC_MODEL_PATH, weights_only=False)
+        
+        encoder.load_state_dict(state_dict['model'])
+        classifier = encoder
+        cls_gpu = True
+        logging.info("Model loading ended!")
 
     # set optimizer for the model
     if args.optimizer == 'adam':
@@ -77,9 +95,6 @@ def prepare_encoder_and_classifier(
         optimizer = torch.optim.SGD(encoder.parameters(), lr=args.learning_rate)
     else:
         raise Exception(f'The optimizer {args.optimizer} is not supported yet.')
-    
-    ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_Final.pth')
-    logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
 
     X_train_final = X_train
     y_train_final = y_train
@@ -105,7 +120,7 @@ def prepare_encoder_and_classifier(
         y_train_final = np.array([y_train[i] for i, family in enumerate(y_train) if family not in singleton_families])
         y_train_binary_final = np.array([y_train_binary[i] for i, family in enumerate(y_train) if family not in singleton_families])
         
-        all_train_family = np.array([all_train_family[i] for i, family in enumerate(y_train) if family not in singleton_families])
+        # all_train_family = np.array([all_train_family[i] for i, family in enumerate(y_train) if family not in singleton_families])
         logging.info(f'After removing singleton families: X_train_final.shape, {X_train_final.shape}, y_train_final.shape, {y_train_final.shape}')
 
     # train the encoder model if it does not already exist.
@@ -200,6 +215,48 @@ def evaluate_valid_test_data(args, encoder, end_date, X_data, y_data, all_data_f
     utils.eval_classifier(args, encoder, end_date, X_data_feat, y_data_binary, all_data_family, data_families, \
                     fout, fam_out, stat_out, gpu = cls_gpu, multi = eval_multi)
 
+
+def get_new_train_data(df, X_train_feat, y_train, y_train_binary, X_test, y_test, y_test_binary):
+    logging.info(f'Test data pseudo label info: {df.head(10)}')
+    logging.info(f'Pseudo labeling for Test data Ended.')
+    logging.info(f'Sample selection Started.....')
+
+    # Sort the dataframe based on Max_value = 'Max_similarity' column and select the first 200 rows
+    df['original_index'] = df.index
+    df_sorted = df.sort_values(by='Max_value', ascending=False).head(200)
+    logging.info(f'Selected top 200 samples based on minimum similarity:\n{df_sorted.head(10)}')
+
+    selected_indices = df_sorted['original_index'].values
+    selected_X_test_feat = X_test[selected_indices]
+    selected_y_test = y_test[selected_indices]
+    selected_y_test_binary = y_test_binary[selected_indices]
+    logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
+
+    # Merge the selected test samples with the training data
+    X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
+    y_train = np.concatenate((y_train, selected_y_test), axis=0)
+    y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
+    logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
+    logging.info(f'Updated y_train shape: {y_train.shape}')
+    logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
+    
+    return X_train_feat, y_train, y_train_binary
+
+def get_train_feat(args, encoder, X_train):
+    if args.cls_feat == 'encoded':
+        X_train_tensor = torch.from_numpy(X_train).float()
+        if torch.cuda.is_available():
+            X_train_tensor = X_train_tensor.cuda()
+            X_feat_tensor = encoder.cuda().encode(X_train_tensor)
+            X_train_feat = X_feat_tensor.cpu().detach().numpy()
+        else:
+            X_train_feat = encoder.encode(X_train_tensor).numpy()
+    else:
+        # args.cls_feat == 'input'
+        X_train_feat = X_train
+
+    return X_train_feat
+
 def main():
     """
     Step (0): Init log path and parse args.
@@ -222,8 +279,8 @@ def main():
     """
     Step (1): Prepare the training dataset. Load the feature vectors and labels.
     """
-    data_dir = args.data.split('/')[-1]
-    logging.info(f'Dataset directory name {data_dir}')
+    DATA_DIR = args.data.split('/')[-1]
+    logging.info(f'Dataset directory name {DATA_DIR}')
 
     logging.info(f'Loading {args.data} training dataset')
     logging.info(f'For API_GRAPH dataset start with the month 2012-01to2012-12_selected.')
@@ -278,10 +335,11 @@ def main():
     """
     logging.info(f'Pretrained model: {args.pretrined_model}')
     if args.pretrined_model == 'False':
+        # Train data training
         cls_gpu, encoder, classifier, X_train_final, \
             y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
             args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
-                NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir)
+                NUM_CLASSES, SAVED_MODEL_FOLDER, DATA_DIR, pre_trained=False)
 
         # Train data evaluation
         evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
@@ -329,7 +387,7 @@ def main():
         logging.info(f'Run complete for Train and Validation.')
 
     else:
-        MODEL_DIR = os.path.join(SAVED_MODEL_FOLDER, data_dir)
+        MODEL_DIR = os.path.join(SAVED_MODEL_FOLDER, DATA_DIR)
         encoder_name = 'simple_enc_classifier'
         ENC_MODEL_PATH = os.path.join(MODEL_DIR, f'{encoder_name}_lr{args.learning_rate}_{args.optimizer}_Final.pth')
         logging.info(f'Initial encoder model: ENC_MODEL_PATH {ENC_MODEL_PATH}')
@@ -350,18 +408,8 @@ def main():
     """
     Select the classifier model.
     """
-    # prepare X_feat and X_feat_tensor if they are embeddings
-    if args.cls_feat == 'encoded':
-        X_train_tensor = torch.from_numpy(X_train).float()
-        if torch.cuda.is_available():
-            X_train_tensor = X_train_tensor.cuda()
-            X_feat_tensor = encoder.cuda().encode(X_train_tensor)
-            X_train_feat = X_feat_tensor.cpu().detach().numpy()
-        else:
-            X_train_feat = encoder.encode(X_train_tensor).numpy()
-    else:
-        # args.cls_feat == 'input'
-        X_train_feat = X_train
+    # # prepare X_feat and X_feat_tensor if they are embeddings
+    # X_train_feat = get_train_feat(args, encoder, X_train)
     
     # Test data evaluation
     fout = open(args.result.split('.csv')[0]+'_test.csv', 'w')
@@ -376,45 +424,30 @@ def main():
     # test_start = (dt.datetime.strptime(args.test_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
     # test_end = (dt.datetime.strptime(args.test_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
     
-    logging.info(f'Loading {args.data} Test dataset form {args.test_start} to {args.test_end}')
+    # logging.info(f'Loading {args.data} Test dataset form {args.test_start} to {args.test_end}')
         
-    X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
+    # X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
         
-    # Test data evaluation
-    evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
-                    all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
+    # # Test data evaluation
+    # evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
+    #                 all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
 
-    logging.info(f'Run complete for Test.')
-    #--------------------------------------------------------------------------------------------------
+    # logging.info(f'Run complete for Test.')
+    # #--------------------------------------------------------------------------------------------------
 
-    """
-    Now the following of the code is for pseudo-labeling and sample selection if needed
-    """
-    logging.info(f'Pseudo labeling for Test data Started.....')
+    # """
+    # Now the following of the code is for pseudo-labeling and sample selection if needed
+    # """
+    # logging.info(f'Pseudo labeling for Test data Started.....')
 
-    y_test_labels = y_test.reshape(-1, 1)
-    df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
-                    X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
-                        X_test_feat=X_test, y_test_binary=y_test_labels)
+    # y_test = y_test.reshape(-1, 1)
+    # y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
 
-    logging.info(f'Test data pseudo label info: {df.head(10)}')
-    logging.info(f'Pseudo labeling for Test data Ended.')
-    logging.info(f'Sample selection Started.....')
+    # df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+    #                 X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+    #                     X_test_feat=X_test, y_test_binary=y_test_binary)
 
-    # Sort the dataframe based on 'Min_similarity' column and select the first 200 rows
-    df_sorted['original_index'] = df.index
-    df_sorted = df.sort_values(by='Min_value').head(200)
-    logging.info(f'Selected top 200 samples based on minimum similarity:\n{df_sorted.head(10)}')
-    selected_indices = df_sorted['original_index'].values
-    selected_X_test_feat = X_test[selected_indices]
-    selected_y_test_binary = y_test[selected_indices]
-    logging.info(f'Selected X_test_feat shape:\n{selected_X_test_feat.shape}')
-
-    # Merge the selected test samples with the training data
-    X_train_feat = np.concatenate((X_train_feat, selected_X_test_feat), axis=0)
-    y_train_binary = np.concatenate((y_train_binary, selected_y_test_binary), axis=0)
-    logging.info(f'Updated X_train_feat shape: {X_train_feat.shape}')
-    logging.info(f'Updated y_train_binary shape: {y_train_binary.shape}')
+    # get_new_train_data(df, X_train_feat, y_train, y_train_binary, X_test, y_test, y_test_binary)
 
     #--------------------------------------------------------------------------------------------------
     
@@ -432,10 +465,52 @@ def main():
 
 
         expanding the training set
-
-
     
     """
+    month_lists = [f'{year}-{month:02d}' for year in range(2013, 2019) for month in range(1, 13)]
+
+    for month in month_lists:
+        args.test_start = month
+        args.test_end = month
+    
+        logging.info(f'Loading {args.data} Test dataset For Month {month}')
+        X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
+            
+        # Test data evaluation
+        evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
+                        all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
+
+        logging.info(f'Test Run complete for Month {month}.')
+        #--------------------------------------------------------------------------------------------------
+
+        """
+        Now the following of the code is for pseudo-labeling and sample selection if needed
+        """
+        logging.info(f'Pseudo labeling for Test data Started.....')
+
+        # prepare X_feat and X_feat_tensor if they are embeddings
+        X_train_feat = get_train_feat(args, encoder, X_train)
+        
+        y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
+        # y_test_binary = y_test_binary.reshape(-1, 1)
+
+        df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+                        X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+                            X_test_feat=X_test, y_test_binary=y_test_binary)
+
+        X_train, y_train, y_train_binary = get_new_train_data(df, X_train, y_train, y_train_binary,\
+                                                                    X_test, y_test, y_test_binary)
+        
+        # Train data retraining for Active Learning
+        cls_gpu, encoder, classifier, X_train_final, \
+            y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
+            args, X_train, y_train, y_train_binary, [], NUM_FEATURES, BIN_NUM_CLASSES, \
+                NUM_CLASSES, SAVED_MODEL_FOLDER, DATA_DIR, pre_trained=True)
+
+        # Train data evaluation
+        evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
+                       all_train_family, train_families, cls_gpu, args.eval_multi, 'train')
+    
     
     # finish writing the result file
     fout.close()

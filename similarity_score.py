@@ -23,17 +23,29 @@ class Similarity:
 
     def cosine(self, feature_matrix1, feature_matrix2):
         # Convert NumPy arrays to PyTorch tensors if necessary
-        if isinstance(feature_matrix1, np.ndarray):
-            feature_matrix1 = torch.tensor(feature_matrix1, dtype=torch.float32)
-        if isinstance(feature_matrix2, np.ndarray):
-            feature_matrix2 = torch.tensor(feature_matrix2, dtype=torch.float32)
+        # if isinstance(feature_matrix1, np.ndarray):
+        #     feature_matrix1 = torch.tensor(feature_matrix1, dtype=torch.float32)
+        # if isinstance(feature_matrix2, np.ndarray):
+        #     feature_matrix2 = torch.tensor(feature_matrix2, dtype=torch.float32)
 
-        # Normalize the matrices
-        feature_matrix1 = F.normalize(feature_matrix1, p=2, dim=-1)
-        feature_matrix2 = F.normalize(feature_matrix2, p=2, dim=-1)
+        # # Normalize the matrices
+        # feature_matrix1 = F.normalize(feature_matrix1, p=2, dim=-1)
+        # feature_matrix2 = F.normalize(feature_matrix2, p=2, dim=-1)
         
-        # Compute cosine similarity
-        similarity_matrix = torch.matmul(feature_matrix1, feature_matrix2.T)
+        # # Compute cosine similarity
+        # similarity_matrix = torch.matmul(feature_matrix1, feature_matrix2.T)
+        A = feature_matrix1
+        B = feature_matrix2
+        dot_product = torch.mm(A, B.T)
+        # Compute L2 norm (magnitude) for each row
+        A_norm = torch.norm(A, p=2, dim=1, keepdim=True)  # Shape: (3,1)
+        B_norm = torch.norm(B, p=2, dim=1, keepdim=True)  # Shape: (5,1)
+    
+        # Compute cosine similarity matrix (broadcasting norms)
+        similarity_matrix = dot_product / (A_norm * B_norm.T)
+    
+        # print("Cosine Similarity Matrix:\n", cosine_similarity)
+        print("Shape:", cosine_similarity.shape)
         return similarity_matrix
     
     def el2norm(self, A, B, lambda_factor=1.0):
@@ -65,7 +77,7 @@ class Similarity:
 
         return sim_weight, sim_indices, max_sim, avg_sim
 
-    def get_majority_label(self, sim_score, sim_indices, feature_labels, feature_family):
+    def get_majority_label(self, sim_score, sim_indices, feature_labels, feature_family=None):
         # Convert NumPy arrays to PyTorch tensors if necessary
         if isinstance(feature_labels, np.ndarray):
             feature_labels = torch.tensor(feature_labels, dtype=torch.float32)
@@ -101,10 +113,10 @@ class Similarity:
         # # Gather the Family based on sim_indices
         # sim_families = torch.gather(expanded_feature_labels, dim=1, index=sim_indices)
         logging.info("Sim Labels Shape: %s", sim_labels.shape)
-        logging.info("Sim Families: %s", feature_family)
+        # logging.info("Sim Families: %s", feature_family)
 
         # Initialize an empty tensor to store (index, label) pairs
-        index_label_family = [[None for _ in range(sim_indices.size(1))] for _ in range(sim_indices.size(0))]
+        index_label = [[None for _ in range(sim_indices.size(1))] for _ in range(sim_indices.size(0))]
 
         # Iterate over sim_indices and fetch the corresponding labels from feature_labels
         # tuple: (index, similarity_score, label, family)
@@ -112,8 +124,8 @@ class Similarity:
             for j in range(sim_indices.size(1)):
                 index = sim_indices[i, j].item()
                 label = feature_labels[0, index].item()
-                family = feature_family[index]
-                index_label_family[i][j] = str((int(index), float(sim_score[i,j]), int(label), str(family)))
+                # family = feature_family[index]
+                index_label[i][j] = str((int(index), float(sim_score[i,j]), int(label)))
 
         # Count occurrences of 0s and 1s along each row
         count_zeros = (sim_labels == 0).sum(dim=1)
@@ -125,7 +137,7 @@ class Similarity:
 
         # Create a (rows, 2) matrix: [majority_value, majority_count]
         result_matrix = torch.stack((majority_value, majority_count), dim=1)
-        return result_matrix.numpy(), np.array(index_label_family)
+        return result_matrix.numpy(), np.array(index_label)
 
 def load_data_and_model(args):
     X_train, y_train, y_train_family = data.load_range_dataset_w_benign(args.data, args.train_start, args.train_end)
@@ -190,9 +202,9 @@ def get_train_test_reprentation(args):
     logging.info("X_train_feat: %s", X_train_feat[:1, :10])
     logging.info("X_test_feat: %s", X_test_feat[:1, :10])
 
-    y_test_labels = y_test_binary.reshape(-1, 1)
+    # y_test_labels = y_test_binary.reshape(-1, 1)
 
-    return X_train_feat, y_train_binary, all_train_family, X_test_feat, y_test_labels
+    return X_train_feat, y_train_binary, all_train_family, X_test_feat, y_test_binary
 
 def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binary, sm_fn, k, tot_columns):
 
@@ -201,13 +213,14 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
     logging.info("Top K similar Indices: %s", topk_sim_indices)
 
     pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
-                                                               feature_labels=y_train_binary, batch_size=args.bsize)
+                                                               feature_labels=y_train_binary)
 
     logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
     logging.info("Topk_info shape: %s", topk_info.shape)
 
     logging.info("Pseudo Labeling for Acutal Datasets ended")
 
+    y_test_binary = y_test_binary.reshape(-1, 1)
     logging.info("Actual Labels shape: %s", y_test_binary.shape)
 
     max_sim = max_sim.numpy().reshape(-1, 1)
@@ -285,7 +298,7 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
 def pesudo_labeling(args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
                     X_train_feat=None, y_train_binary=None, X_test_feat=None, y_test_binary=None):
 
-    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Min_value', 'Avg_value']
+    column_names = ['Pseudo Label', 'Majority', 'Actual Label', 'Max_value', 'Avg_value']
 
     if is_single_k_sm_fn:
         temp_cols = []
