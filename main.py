@@ -37,7 +37,7 @@ def load_data(data_dir, start_month, end_month):
     return X, y, all_family
 
 def prepare_encoder_and_classifier(
-        args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
+        args, X_train, y_train, y_train_binary, all_train_family, X_test, NUM_FEATURES, BIN_NUM_CLASSES, \
             NUM_CLASSES, SAVED_MODEL_FOLDER, data_dir, pre_trained=False):
 
     MODEL_DIR = os.path.join(SAVED_MODEL_FOLDER, data_dir)
@@ -130,7 +130,7 @@ def prepare_encoder_and_classifier(
         s1 = time.time()
         train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
                             optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
-                            save_snapshot = True)
+                            save_snapshot = True, X_unlabeled=X_test)
         e1 = time.time()
         logging.info(f'Training Encoder model time: {(e1 - s1):.3f} seconds')
         
@@ -151,8 +151,10 @@ def prepare_encoder_and_classifier(
 
     if args.classifier in ['simple-enc-mlp'] or args.classifier == args.encoder:
         # we have already trained it as the sample selection model.
+        state_dict = torch.load(ENC_MODEL_PATH, weights_only=False)
+        encoder.load_state_dict(state_dict['model'])
         classifier = encoder
-        CLS_MODEL_PATH = ENC_MODEL_PATH
+
         cls_gpu = True
     elif args.classifier == 'mlp':
         if args.encoder == 'mlp':
@@ -325,7 +327,6 @@ def main():
     y_train_binary = np.array([1 if item != 0 else 0 for item in y_train])
     BIN_NUM_CLASSES = 2
 
-
     """
     Step (3): Train the encoder model.
     `encoder` needs to have the same APIs.
@@ -333,15 +334,21 @@ def main():
     """
     logging.info(f'Pretrained model: {args.pretrined_model}')
     if args.pretrined_model == 'False':
+
+        args.test_start = args.test_end
+        logging.info(f'Loading {args.data} Test dataset form month {args.test_start}')
+        
+        X_test, _, _ = load_data(args.data, args.test_start, args.test_end)
+
         # Train data training
         cls_gpu, encoder, classifier, X_train_final, \
             y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
-            args, X_train, y_train, y_train_binary, all_train_family, NUM_FEATURES, BIN_NUM_CLASSES, \
+            args, X_train, y_train, y_train_binary, all_train_family, X_test, NUM_FEATURES, BIN_NUM_CLASSES, \
                 NUM_CLASSES, SAVED_MODEL_FOLDER, DATA_DIR, pre_trained=False)
 
         # Train data evaluation
         evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
-                       all_train_family, train_families, cls_gpu, args.eval_multi, 'train')
+                       all_train_family, train_families, cls_gpu, eval_multi=False, data_type='train')
 
         # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
         # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
@@ -363,8 +370,8 @@ def main():
         stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
         for i in range(1, 7):
-            valid_start = (dt.datetime.strptime(args.valid_start, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
-            valid_end = (dt.datetime.strptime(args.valid_end, '%Y-%m') + relativedelta(months=i)).strftime('%Y-%m')
+            valid_start = (dt.datetime.strptime(args.valid_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
+            valid_end = (dt.datetime.strptime(args.valid_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
         
             # logging.info(f'Loading {args.data} validation dataset form {args.valid_start} to {args.valid_end}')
             
@@ -372,7 +379,7 @@ def main():
                 
             # Valid data evaluation
             evaluate_valid_test_data(args, classifier, valid_end, X_valid, y_valid,\
-                       all_valid_family, cls_gpu, args.eval_multi, 'valid', fout, fam_out, stat_out)
+                       all_valid_family, cls_gpu, False, 'valid', fout, fam_out, stat_out)
         
         # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
         # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
@@ -380,8 +387,7 @@ def main():
         # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_valid.csv', 'w')
         # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
         # sample_explanation.flush()
-        #--------------------------------------------------------------------------------------------------
-
+        #---------------------------------------------------------------------------------------------------
         logging.info(f'Run complete for Train and Validation.')
 
     else:
@@ -409,12 +415,13 @@ def main():
     # # prepare X_feat and X_feat_tensor if they are embeddings
     # X_train_feat = get_train_feat(args, encoder, X_train)
     
+    substr = str(args.epochs)+'_'+args.sm_fn+'_'+str(args.num_samples)
     # Test data evaluation
-    fout = open(args.result.split('.csv')[0]+'_test.csv', 'w')
+    fout = open(args.result.split('.csv')[0]+'_'+substr+'_test.csv', 'w')
     fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0]+'_family_test.csv', 'w')
+    fam_out = open(args.result.split('.csv')[0]+'_'+substr+'_family_test.csv', 'w')
     fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0]+'_stat_test.csv', 'w')
+    stat_out = open(args.result.split('.csv')[0]+'_'+substr+'_stat_test.csv', 'w')
     stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
     # for i in range(1, 13):
@@ -422,7 +429,7 @@ def main():
     # test_start = (dt.datetime.strptime(args.test_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
     # test_end = (dt.datetime.strptime(args.test_end, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
     
-    # logging.info(f'Loading {args.data} Test dataset form {args.test_start} to {args.test_end}')
+    # logging.info(f'Loading {args.data} Test dataset form month{args.test_start} for Evaluation')
         
     # X_test, y_test, all_test_family = load_data(args.data, args.test_start, args.test_end)
         
@@ -465,8 +472,14 @@ def main():
         expanding the training set
     
     """
-    month_lists = [f'{year}-{month:02d}' for year in range(2013, 2019) for month in range(1, 13)]
+    logging.info(f'### Active Learning Started.....')
+    
+    X_unlabeled = X_test
 
+    month_lists = [f'{year}-{month:02d}' for year in range(2013, 2019) for month in (range(8, 13) if year == 2013 else range(1, 13))]
+    
+    # For Active learning, we will run for 100 epochs
+    args.epochs = 100
     for month in month_lists:
         args.test_start = month
         args.test_end = month
@@ -476,7 +489,7 @@ def main():
             
         # Test data evaluation
         evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
-                        all_test_family, cls_gpu, args.eval_multi, 'test', fout, fam_out, stat_out)
+                        all_test_family, cls_gpu, False, 'test', fout, fam_out, stat_out)
 
         logging.info(f'Test Run complete for Month {month}.')
         #--------------------------------------------------------------------------------------------------
@@ -486,29 +499,31 @@ def main():
         """
         logging.info(f'Pseudo labeling for Test data Started.....')
 
+        X_unlabeled = np.concatenate((X_unlabeled, X_test), axis=0)
+
         # prepare X_feat and X_feat_tensor if they are embeddings
-        X_train_feat = get_train_feat(args, encoder, X_train)
+        # X_train_feat = get_train_feat(args, encoder, X_train)
         
-        y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
+        # y_test_binary = np.array([1 if item != 0 else 0 for item in y_test])
         # y_test_binary = y_test_binary.reshape(-1, 1)
 
-        df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
-                        X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
-                            X_test_feat=X_test, y_test_binary=y_test_binary)
+        # df = pesudo_labeling(args=args, is_single_k_sm_fn=True, K=5, sm_fn='euclidean', ckpt_index=None, \
+        #                 X_train_feat=X_train_feat, y_train_binary=y_train_binary, \
+        #                     X_test_feat=X_test, y_test_binary=y_test_binary)
 
-        X_train, y_train, y_train_binary, all_train_family = get_new_train_data(df, X_train, y_train,\
-                                                                                y_train_binary, all_train_family,\
-                                                                                X_test, y_test, y_test_binary, all_test_family)
+        # X_train, y_train, y_train_binary, all_train_family = get_new_train_data(df, X_train, y_train,\
+        #                                                                         y_train_binary, all_train_family,\
+        #                                                                         X_test, y_test, y_test_binary, all_test_family)
         
         # Train data retraining for Active Learning
         cls_gpu, encoder, classifier, X_train_final, \
             y_train_binary_final, ENC_MODEL_PATH = prepare_encoder_and_classifier(
-            args, X_train, y_train, y_train_binary, [], NUM_FEATURES, BIN_NUM_CLASSES, \
+            args, X_train, y_train, y_train_binary, [], X_unlabeled, NUM_FEATURES, BIN_NUM_CLASSES, \
                 NUM_CLASSES, SAVED_MODEL_FOLDER, DATA_DIR, pre_trained=True)
 
         # Train data evaluation
         evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
-                       all_train_family, train_families, cls_gpu, args.eval_multi, 'train')
+                       all_train_family, train_families, cls_gpu, eval_multi=False, data_type='train')
     
     
     # finish writing the result file

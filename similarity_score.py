@@ -28,25 +28,16 @@ class Similarity:
         # if isinstance(feature_matrix2, np.ndarray):
         #     feature_matrix2 = torch.tensor(feature_matrix2, dtype=torch.float32)
 
-        # # Normalize the matrices
-        # feature_matrix1 = F.normalize(feature_matrix1, p=2, dim=-1)
-        # feature_matrix2 = F.normalize(feature_matrix2, p=2, dim=-1)
-        
-        # # Compute cosine similarity
-        # similarity_matrix = torch.matmul(feature_matrix1, feature_matrix2.T)
-        A = feature_matrix1
-        B = feature_matrix2
-        dot_product = torch.mm(A, B.T)
-        # Compute L2 norm (magnitude) for each row
-        A_norm = torch.norm(A, p=2, dim=1, keepdim=True)  # Shape: (3,1)
-        B_norm = torch.norm(B, p=2, dim=1, keepdim=True)  # Shape: (5,1)
-    
-        # Compute cosine similarity matrix (broadcasting norms)
-        similarity_matrix = dot_product / (A_norm * B_norm.T)
+       # Normalize both matrices
+        matrix1_norm = F.normalize(feature_matrix1, p=2, dim=1)  # Normalize along feature axis
+        matrix2_norm = F.normalize(feature_matrix2, p=2, dim=1)
+
+        # Compute cosine similarity using matrix multiplication
+        cosine_similarity = torch.mm(matrix1_norm, matrix2_norm.T)  # Shape: (2520, 30497)
     
         # print("Cosine Similarity Matrix:\n", cosine_similarity)
-        print("Shape:", cosine_similarity.shape)
-        return similarity_matrix
+        # print("Shape:", cosine_similarity.shape)
+        return cosine_similarity
     
     def el2norm(self, A, B, lambda_factor=1.0):
         """Compute EL2Norm similarity between vectors A and B."""
@@ -88,6 +79,8 @@ class Similarity:
             sim_matrix = self.euclidean_dist(feature_matrix1, feature_matrix2)
 
         sim_weight, sim_indices = sim_matrix.topk(k=K, dim=-1)
+
+        # logging.info("Similarity Weight: %s", sim_weight)
 
         # Calculate the maximum and average values of the top K similarities
         max_sim = sim_weight.max(dim=-1).values
@@ -239,7 +232,7 @@ def single_k_sm_fn(args, X_train_feat, y_train_binary, X_test_feat, y_test_binar
 
     topk_sim_weight, topk_sim_indices, max_sim, avg_sim = Similarity().topk_similar(k, sm_fn, X_test_feat, X_train_feat)
 
-    logging.info("Top K similar Indices: %s", topk_sim_indices)
+    # logging.info("Top K similar Indices: %s", topk_sim_indices)
 
     # pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
     #                                                            feature_labels=y_train_binary)
@@ -266,31 +259,39 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
     
     topk_sim_weight, topk_sim_indices, max_sim, _ = Similarity().topk_similar(K, sm_fn, X_test_feat, X_train_feat)
 
-    logging.info("Top K similar Indices: %s", topk_sim_indices)
+    # logging.info("Top K similar Indices: %s", topk_sim_indices)
+    # logging.info("Top K similar Weight: %s", topk_sim_weight)
 
-    pseudo_labels, topk_info = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
+    # logging.info("Top K similar Indices: %s", topk_sim_indices)
+
+    pseudo_labels, _ = Similarity().get_majority_label(topk_sim_weight, topk_sim_indices, \
                                                                feature_labels=y_train_binary, \
                                                                 feature_family=all_train_family)
 
     logging.info("Pesudo Labels shape: %s", pseudo_labels.shape)
-    logging.info("Topk_info shape: %s", topk_info.shape)
+    # logging.info("Topk_info shape: %s", topk_info.shape)
     logging.info("Pseudo Labeling for Acutal Datasets ended")
     # logging.info("Actual Labels shape: %s", y_test_binary.shape)
 
     max_sim = max_sim.numpy().reshape(-1, 1)
     # avg_sim = avg_sim.numpy().reshape(-1, 1)
 
-    concatenated_array = np.concatenate((pseudo_labels, max_sim, topk_info), axis=1)
+    # logging.info("Pseudo Labelling: %s", pseudo_labels)
+    # logging.info("Max Similarity: %s", max_sim)
+
+    # pseudo_labels is Nx2 matrix, where n is the number of samples
+    # The first column contains the pseudo labels and the second column contains the mejority votes
+    concatenated_array = np.concatenate((pseudo_labels, max_sim), axis=1)
     logging.info("Concatenated Array Shape: %s", concatenated_array.shape)
 
-    df = pd.DataFrame(concatenated_array)
+    df = pd.DataFrame(concatenated_array, columns=['Pseudo Label', 'Majority Vote', 'Max_value'])
     # create new index column to maintain the original indices of the samples
-    df.insert(0, '', df.index)
+    df.insert(0, 'Original Index', df.index)
 
-    # Sort the DataFrame based on the 5th column (index 4) in descending order
+    # Sort the DataFrame based on the 4th column (index 3) in descending order
     # Sorting desending order based on the Highest Similarity Score
-    # Column 2 contains the Max Similarity values
-    df_sorted = df.sort_values(by=df.columns[2], ascending=False)
+    # Column 3 contains the Max Similarity values
+    df_sorted = df.sort_values(by=df.columns[3], ascending=False)
     # Add a new column for original indices before the first column
 
     # Take the top num_samples rows while keeping the original indices
@@ -298,7 +299,7 @@ def get_high_similar_samples(X_train_feat, y_train_binary, all_train_family,\
 
     logging.info("Top Samples Shape: %s", df_top_samples.shape)
     # Print the last K columns of the first row
-    logging.info("First row data: %s", df_top_samples.iloc[0, (K+1):].tolist())
+    logging.info("First row data: %s", df_top_samples.iloc[0, :])
 
     # samples = [df_top_samples.iloc[i, (K+1):].tolist() for i in range(df_top_samples.shape[0])]
  

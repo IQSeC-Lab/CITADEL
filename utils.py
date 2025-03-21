@@ -38,6 +38,18 @@ def parse_args():
     p.add_argument('--test_start', default="2013-07", help='First test month.')
     p.add_argument('--test_end', default="2018-12", help='Last test month.')
 
+    # semi-supervised learning
+    p.add_argument('--ssl', action='store_true', help='Whether to do semi-supervised learning.')
+    p.add_argument('--ssl_epochs', default=50, type=int,
+                   help='Semi-supervised learning training epochs.')
+    p.add_argument('--split-train', action='store_true',
+                   help='Whether to split train data for SSL.')
+    p.add_argument('--pseudolabel', action='store_true',  help='Whether to do active learning.')
+    p.add_argument('--sm_fn', type=str, help='Whether to do active learning.')
+    p.add_argument('--num_samples', type=int, help='Whether to do active learning.')
+    p.add_argument('--lambdda', type=float, help='multiplier for the loss')
+    p.add_argument('--k_majority', type=int, help='multiplier for the loss')
+
     '''
     p.add_argument('--test_start', help='First test month.')
     p.add_argument('--test_end', help='Last test month.')
@@ -59,14 +71,14 @@ def parse_args():
                 help='The hidden layers of the encoder, example: "512-128-32"')
     p.add_argument('--learning_rate', default=0.003, type=float,
                    help='Overall learning rate.')
-    p.add_argument('--optimizer', default='sgd', type=str, choices=['adam', 'sgd'],
+    p.add_argument('--optimizer', default='sgd', type=str, choices=['sgd_momentum', 'adam', 'sgd'],
                         help='Choosing an optimzer')
     p.add_argument('--epochs', default=250, type=int,
                    help='Training epochs.')
     p.add_argument('--result_epochs', default=20, type=int,
                    help='Result Epochs epochs.')
     p.add_argument('--loss_func', default='hi-dist-xent',
-            choices=['triplet', 'triplet-mse', 'hi-dist-xent'],
+            choices=['ssl-loss', 'triplet', 'triplet-mse', 'hi-dist-xent'],
             help='contrastive loss function choice.')
     # classifier
     p.add_argument('-c', '--classifier', default='svm',
@@ -200,6 +212,47 @@ def parse_args():
 def create_folder(name):
     if not os.path.exists(name):
         os.makedirs(name)
+
+def get_labeled_unlabeled_indices(X_data, y_data, percentage_labeled=10):
+    """
+    Splits an dataset into labeled and unlabeled sets while preserving class distribution.
+    
+    Parameters:
+    - X_data, y_data: dataset.
+    - percentage_labeled: Percentage of labeled samples per malware family.
+    
+    Returns:
+    - labeled and unlabeled indices.
+    """
+    # Load the dataset
+    features, labels = X_data, y_data
+    
+    # Get unique malware families
+    unique_labels = np.unique(labels)
+    
+    labeled_features, labeled_labels = [], []
+    unlabeled_features = []
+    labeled_indices = []
+    unlabeled_indices = []
+
+    # Split each malware family separately
+    for label in unique_labels:
+        # Get indices for this class
+        class_indices = np.where(labels == label)[0]
+        np.random.shuffle(class_indices)  # Shuffle indices
+        
+        # Compute split point
+        num_labeled = int(len(class_indices) * (percentage_labeled / 100.0))
+        
+        # Get labeled and unlabeled indices
+        labeled_idx = class_indices[:num_labeled]
+        unlabeled_idx = class_indices[num_labeled:]
+        labeled_indices.extend(labeled_idx)
+        unlabeled_indices.extend(unlabeled_idx)
+    
+
+    #print(f"Labeled samples: {len(labeled_features)}, Unlabeled samples: {len(unlabeled_features)}")
+    return labeled_indices, unlabeled_indices
 
 def get_model_dims(model_name, input_layer_num, hidden_layer_num, output_layer_num):
     """convert hidden layer arguments to the architecture of a model (list)
