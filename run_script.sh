@@ -2,10 +2,10 @@
 
 SEQ=088
 LR=0.0001
-OPT=adam
+OPT=sgd
 SCH=step
 DECAY=0.90
-EPOCHS=100
+EPOCHS=250
 RESULT_EPOCHS=30
 WLR=0.00015
 WE=0.0001
@@ -24,18 +24,19 @@ SM_FN='cosine'
 NUM_SAMP=1000
 LAMBDA=0.1
 K=1
+PRE=False
+GPU=cuda:2
+P_METHOD='mean_teacher'
 
 RESULT_DIR=/home/ihossain/ISMAIL/SSL-malware/results_ours
 AL_OPT=adam
-PRE=False
-GPU=cuda:2
 
 CNT=1000
 
 modeldim="512-384-256-128"
 S='half'
 B=1024
-LOSS='ssl-loss'
+LOSS='mse'
 TS=$(date "+%m.%d-%H.%M.%S")
 
 nohup python -u main.py	                                    \
@@ -46,17 +47,18 @@ nohup python -u main.py	                                    \
             --k_majority ${K}                               \
             --data ${DATA}                                  \
             --mdate 20230501                                \
-            --epochs ${EPOCHS}                                \
-            --result_epochs ${RESULT_EPOCHS}                  \
+            --epochs ${EPOCHS}                              \
+            --result_epochs ${RESULT_EPOCHS}                \
             --train_start ${TRAIN_START}                    \
             --train_end ${TRAIN_END}                        \
-            --valid_start ${VALID_START}                      \
-            --valid_end ${VALID_END}                          \
+            --valid_start ${VALID_START}                    \
+            --valid_end ${VALID_END}                        \
             --test_start ${TEST_START}                      \
             --test_end ${TEST_END}                          \
-            --cls_feat input                                 \
+            --cls_feat input                                \
             --encoder simple-enc-mlp                        \
             --classifier simple-enc-mlp                     \
+            --pseudo_labelling_method ${P_METHOD}           \
             --pretrined_model ${PRE}                        \
             --loss_func ${LOSS}                             \
             --enc-hidden ${modeldim}                        \

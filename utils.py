@@ -50,6 +50,9 @@ def parse_args():
     p.add_argument('--lambdda', type=float, help='multiplier for the loss')
     p.add_argument('--k_majority', type=int, help='multiplier for the loss')
 
+    p.add_argument('--pseudo_labelling_method', type=str, choices=['mean_teacher', 'pseudo++', 'uda', 'mixmatch', 'fixmatch'],\
+                    help='Method to generate pseudo labels')
+
     '''
     p.add_argument('--test_start', help='First test month.')
     p.add_argument('--test_end', help='Last test month.')
@@ -78,7 +81,7 @@ def parse_args():
     p.add_argument('--result_epochs', default=20, type=int,
                    help='Result Epochs epochs.')
     p.add_argument('--loss_func', default='hi-dist-xent',
-            choices=['ssl-loss', 'triplet', 'triplet-mse', 'hi-dist-xent'],
+            choices=['mse', 'ssl-loss', 'triplet', 'triplet-mse', 'hi-dist-xent'],
             help='contrastive loss function choice.')
     # classifier
     p.add_argument('-c', '--classifier', default='svm',
@@ -317,10 +320,11 @@ def eval_classifier(args, classifier, cur_month_str, X, y_binary, y_family, trai
                 (cur_month_str, tpr, tnr, fpr, fnr, acc, precision, f1))
     fout.flush()
     if multi == False:
-        tn, fp, fn, tp = confusion_matrix(y_binary, y_pred_bin).ravel()
-        stat_out.write('%s\t%d\t%d\t%d\t%d\t%d\n' % \
-                    (cur_month_str, X.shape[0], tp, tn, fp, fn))
-        stat_out.flush()
+        if stat_out is not None:
+            tn, fp, fn, tp = confusion_matrix(y_binary, y_pred_bin).ravel()
+            stat_out.write('%s\t%d\t%d\t%d\t%d\t%d\n' % \
+                        (cur_month_str, X.shape[0], tp, tn, fp, fn))
+            stat_out.flush()
 
     # check FNR within different families.
     family_cnt = defaultdict(lambda: 0)
@@ -334,12 +338,15 @@ def eval_classifier(args, classifier, cur_month_str, X, y_binary, y_family, trai
         family = y_family[idx]
         neg_by_fam[family] += 1
         family_to_idx[family].append(idx)
-    for family, neg_cnt in neg_by_fam.items():
-        new = family not in train_families
-        fam_total = family_cnt[family]
-        fam_rate = neg_cnt / float(fam_total)
-        fam_out.write('%s\t%s\t%s\t%s\t%d\n' % (cur_month_str, new, family, fam_rate, neg_cnt))
-        fam_out.flush()
+
+    if fam_out is not None:
+        for family, neg_cnt in neg_by_fam.items():
+            new = family not in train_families
+            fam_total = family_cnt[family]
+            fam_rate = neg_cnt / float(fam_total)
+            fam_out.write('%s\t%s\t%s\t%s\t%d\n' % (cur_month_str, new, family, fam_rate, neg_cnt))
+            fam_out.flush()
+    
     return y_pred, neg_by_fam, family_to_idx
 
 

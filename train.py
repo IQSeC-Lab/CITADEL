@@ -10,7 +10,7 @@ from pytorch_metric_learning.samplers import MPerClassSampler
 
 from common import to_categorical
 from losses import TripletMSELoss, BinaryCrossEntropy
-from losses import HiDistanceXentLoss, SSL_Loss
+from losses import HiDistanceXentLoss, SSL_Loss, OOD_Loss
 from samplers import ProportionalClassSampler
 from samplers import HalfSampler
 from samplers import TripletSampler
@@ -18,6 +18,71 @@ from utils import AverageMeter
 from utils import save_model
 from utils import adjust_learning_rate
 from similarity_score import get_high_similar_samples
+import copy
+from tqdm import tqdm  # Import tqdm for progress bar
+
+def pseudo_label_batch_loss(model, x_unlabeled, threshold=0.95, T=0.5):
+    """
+    model: the neural net
+    x_unlabeled: tensor of shape (B, input_dim)
+    threshold: minimum confidence for trusting pseudo-labels
+    T: temperature for soft label sharpening (optional)
+    """
+
+    # Get model predictions
+    with torch.no_grad():
+        _,_, probs = model(x_unlabeled)                          # shape (B, C)
+        # probs = F.softmax(logits, dim=1)                     # shape (B, C)
+        confidence, pseudo_labels = torch.max(probs, dim=1)  # (B,), (B,)
+
+    # Select high-confidence indices
+    mask = confidence > threshold                            # (B,)
+    selected_indices = mask.nonzero(as_tuple=True)[0]
+
+    if len(selected_indices) == 0:
+        return torch.tensor(0.0, requires_grad=True)  # No confident samples
+
+    # Option 1: Use hard pseudo-labels
+    logits_sel = model(x_unlabeled[selected_indices])
+    targets_sel = pseudo_labels[selected_indices]
+    loss = F.cross_entropy(logits_sel, targets_sel)
+
+    # Option 2 (alternative): Use sharpened soft labels (soft targets)
+    # probs_sel = sharpen(probs[selected_indices], T=T)
+    # logits_sel = model(x_unlabeled[selected_indices])
+    # log_probs = F.log_softmax(logits_sel, dim=1)
+    # loss = F.kl_div(log_probs, probs_sel, reduction='batchmean')
+
+    return loss
+
+def sharpen(probs, T=0.5):
+    probs = probs ** (1 / T)
+    return probs / probs.sum(dim=1, keepdim=True)
+
+# Outlier Exposure loss (simplified)
+def oe_loss(probs):
+    # probs = F.softmax(logits, dim=1)
+    return -torch.mean(torch.sum(torch.log(probs + 1e-10) / probs.size(1), dim=1))
+
+# ✅ 1. Generalized Cross Entropy (GCE) Loss
+def GCE(probs, targets, q=0.7):
+    # probs = F.softmax(logits, dim=1)
+    probs_true = probs[torch.arange(len(targets)), targets]
+    loss = (1 - probs_true.pow(q)) / q
+    return loss.mean()
+
+# ✅ Symmetric Cross Entropy (SCE) Loss
+def SCE(logits, targets, alpha=0.7, beta=1.0):
+    ce = F.cross_entropy(logits, targets)
+
+    # Reverse cross-entropy
+    probs = F.softmax(logits, dim=1)
+    one_hot = F.one_hot(targets, num_classes=logits.size(1)).float()
+    rce = -torch.sum(probs * torch.log(one_hot + 1e-10), dim=1).mean()
+
+    return alpha * ce + beta * rce
+
+
 
 def pseudo_loss(args, encoder, X_train, y_train, y_train_binary, \
                 X_test, y_test_pred, test_offset, total_epochs):
@@ -174,24 +239,7 @@ def pseudo_loss_one_epoch(args, encoder, data_loader, sample_num, epoch):
         # args.sample_reduce == 'max':
         return sample_max_loss.numpy()
 
-def train_encoder1(args, encoder, X_train, y_train, y_train_binary,
-                optimizer, total_epochs, model_path,
-                weight = None, upsample = None, adjust = False, warm = False,
-                save_best_loss = False,
-                save_snapshot = False,
-                pl_pretrain = False):
-    # construct the dataset loader
-    # y_train is multi-class, y_train_binary is binary class
-    X_train_tensor = torch.from_numpy(X_train).float()
-    y_train_tensor = torch.from_numpy(y_train).type(torch.int64)
-    y_train_binary_cat_tensor = torch.from_numpy(to_categorical(y_train_binary)).float()
-    if weight is None:
-        weight_tensor = torch.ones(X_train.shape[0])
-    else:
-        weight_tensor = torch.from_numpy(weight).float()
-    train_data = TensorDataset(X_train_tensor, y_train_tensor, y_train_binary_cat_tensor, weight_tensor)
-
-    # compute batch size if it is not specified
+def get_data_loader(args, train_data, y_train, upsample = None):
     if args.sampler == 'mperclass':
         bsize = args.sample_per_class * len(np.unique(y_train))
         train_loader = DataLoader(dataset=train_data, batch_size=bsize, \
@@ -212,7 +260,91 @@ def train_encoder1(args, encoder, X_train, y_train, y_train_binary,
         train_loader = DataLoader(dataset=train_data, batch_size=bsize, shuffle=True)
     else:
         raise Exception(f'Sampler {args.sampler} not implemented yet.')
+    
+    return train_loader, bsize
+
+# === 3. EMA Update ===
+@torch.no_grad()
+def update_ema(teacher_model, student_model, alpha=0.99):
+    for t_param, s_param in zip(teacher_model.parameters(), student_model.parameters()):
+        t_param.data = alpha * t_param.data + (1 - alpha) * s_param.data
+
+# === 4. Mean Teacher Training Step ===
+def mean_teacher_step(args, student, teacher, labeled_loader, unlabeled_loader, optimizer, lambda_consistency=50.0):
+
+    device = (args.gpu
+                if torch.cuda.is_available()
+                else torch.device('cpu'))
+
+    student = student.to(device)
+    teacher = teacher.to(device)
+
+    student.train()
+    teacher.eval()
+
+    # Step 1: Supervised loss on labeled data
+    for (x_l, _, y_l, _) in labeled_loader:
+        # logging.info('x_l:', x_l)
+        x_l = x_l.to(device)
+        y_l = y_l.to(device)
+
+        _,_,probs = student(x_l)
+        loss_sup = F.cross_entropy(probs, y_l)
+
+        # Step 2: Consistency loss on unlabeled data
+        for x_u in unlabeled_loader:
+            # logging.info('x_u:', x_u)
+            x_u = x_u[0].to(device)
+            _,_,student_probs = student(x_u)
+            _,_,teacher_probs = teacher(x_u)
+            # student_probs = F.softmax(student_logits, dim=1)
+            # teacher_probs = F.softmax(teacher_logits, dim=1)
+            loss_consistency = F.mse_loss(student_probs, teacher_probs)
+
+            # Total loss
+            total_loss = loss_sup + lambda_consistency * loss_consistency
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+            # Update teacher model using EMA
+            update_ema(teacher, student)
+
+            return total_loss.item()
+
+def train_encoder_new(args, encoder, X_train, y_train, y_train_binary, X_unlabeled,
+                optimizer, total_epochs, model_path,
+                weight = None, upsample = None, adjust = False, warm = False,
+                save_best_loss = False,
+                save_snapshot = False,
+                pl_pretrain = False):
+    # construct the dataset loader
+    # y_train is multi-class, y_train_binary is binary class
+    X_train_tensor = torch.from_numpy(X_train).float()
+    y_train_tensor = torch.from_numpy(y_train).type(torch.int64)
+    y_train_binary_cat_tensor = torch.from_numpy(to_categorical(y_train_binary)).float()
+
+    if weight is None:
+        weight_tensor = torch.ones(X_train.shape[0])
+    else:
+        weight_tensor = torch.from_numpy(weight).float()
+    train_data = TensorDataset(X_train_tensor, y_train_tensor, y_train_binary_cat_tensor, weight_tensor)
+
+    # compute batch size if it is not specified
+    train_loader, bsize = get_data_loader(args, train_data, y_train, upsample = upsample)
+    
     best_loss = np.inf
+
+    if args.pseudo_labelling_method == 'mean_teacher':
+        student = encoder
+        teacher = copy.deepcopy(student)
+
+    # construct the dataset loader for unlabeled data
+    X_unlabeled_tensor = torch.from_numpy(X_unlabeled).float()
+    unlabeled_data = TensorDataset(X_unlabeled_tensor)
+    unlabeled_loader = DataLoader(dataset=unlabeled_data, batch_size=bsize, shuffle=True)
+    # logging.info('Unlabeled data loader:', unlabeled_loader)
+
     for epoch in range(1, total_epochs + 1):
         if adjust == True:
             # only adjust learning rate when training the initial model.
@@ -226,18 +358,21 @@ def train_encoder1(args, encoder, X_train, y_train, y_train_binary,
         # train one epoch
         time1 = time.time()
         if pl_pretrain == False:
-            loss = train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
+            if args.pseudo_labelling_method == 'mean_teacher':
+                loss = mean_teacher_step(args, student, teacher, train_loader, unlabeled_loader, optimizer)
+            else:
+                loss = train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
         # else:
         #     loss = pl_train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch)
         time2 = time.time()
-        logging.info('epoch {}, b {}, lr {}, loss {}, total time {:.2f}'.format(epoch, bsize, new_lr, loss, time2 - time1))
+        logging.info('epoch {}/{}, b {}, lr {}, loss {}, total time {:.2f}'.format(epoch, total_epochs, bsize, new_lr, loss, time2 - time1))
 
-        # if epoch >= total_epochs - 10:
-        #     if save_best_loss == True:
-        #         if loss < best_loss:
-        #             best_loss = loss
-        #             logging.info(f'Saving the best loss {loss} model from epoch {epoch}...')
-        #             save_model(encoder, optimizer, args, args.epochs, model_path)
+        if epoch >= total_epochs - 10:
+            if save_best_loss == True:
+                if loss < best_loss:
+                    best_loss = loss
+                    logging.info(f'Saving the best loss {loss} model from epoch {epoch}...')
+                    save_model(encoder, optimizer, args, args.epochs, model_path)
     
         if save_snapshot == True and epoch % args.result_epochs == 0:
             save_path = model_path.replace("Final", str(epoch))
@@ -503,13 +638,15 @@ def train_encoder_one_epoch(args, encoder, train_loader, optimizer, epoch, pseud
                     _, pseudo_features, pseudo_preds = encoder(x_pseudo)
                     
                     # Our own version of the supervised contrastive learning loss
-                    ssl_loss = SSL_Loss().to(device=device)
-                    pseudo_batch_loss = ssl_loss(pseudo_preds=pseudo_preds, pseudo_labels=y_pseudo)
+                    ssl_loss =  SSL_Loss().to(device=device)
+                    pseudo_batch_loss = ssl_loss(pseudo_preds=pseudo_preds, pseudo_labels=y_pseudo) #GCE(pseudo_preds, y_pseudo) #ssl_loss(pseudo_preds=pseudo_preds, pseudo_labels=y_pseudo)
+                    # pseudo_batch_loss = pseudo_label_batch_loss(encoder, x_pseudo, threshold=0.95)
                     pseudo_loss += pseudo_batch_loss
                     pseudo_count += 1
+                    
                 pseudo_loss = pseudo_loss / pseudo_count
                 #logging.info(f'pseudo_loss {pseudo_loss}')
-                loss = loss*args.lambdda + pseudo_loss # Adding bce loss and pseudo loss
+                loss = loss + (args.lambdda * pseudo_loss)  # Adding bce loss and pseudo loss multiplied by args.lambdda
                 # loss /= 2 # average the loss
                 #logging.info(f'Combined loss {loss}')
                     

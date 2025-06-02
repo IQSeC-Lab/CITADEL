@@ -14,13 +14,14 @@ from pprint import pformat
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.svm import LinearSVC
+from tqdm import tqdm  # Import tqdm for progress bar
 
 # local imports
 import data
 from joblib import dump
 import utils
 from models import SimpleEncClassifier, MLPClassifier
-from train import train_encoder, train_classifier
+from train import train_encoder, train_classifier, train_encoder_new
 
 from similarity_score import pesudo_labeling
 
@@ -128,7 +129,12 @@ def prepare_encoder_and_classifier(
     if args.encoder in ['enc', 'simple-enc-mlp']:
         #if args.retrain_first == True or not os.path.exists(ENC_MODEL_PATH):
         s1 = time.time()
-        train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
+        if args.pseudo_labelling_method == 'mean_teacher':
+            train_encoder_new(args, encoder, X_train_final, y_train_final, y_train_binary_final, X_test, \
+                            optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
+                            save_snapshot = True)
+        else:
+            train_encoder(args, encoder, X_train_final, y_train_final, y_train_binary_final, \
                             optimizer, args.epochs, ENC_MODEL_PATH, adjust = True, save_best_loss = False, \
                             save_snapshot = True, X_unlabeled=X_test)
         e1 = time.time()
@@ -175,19 +181,20 @@ def evaluate_train_data(args, classifier, end_date, X_data, y_data_binary, \
     """
     fout = open(args.result.split('.csv')[0] + f'_{data_type}.csv', 'w')
     fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0] + f'_family_{data_type}.csv', 'w')
-    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0] + f'_stat_{data_type}.csv', 'w')
-    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+    # fam_out = open(args.result.split('.csv')[0] + f'_family_{data_type}.csv', 'w')
+    # fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+    # stat_out = open(args.result.split('.csv')[0] + f'_stat_{data_type}.csv', 'w')
+    # stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
-    utils.eval_classifier(args, classifier, end_date, X_data, y_data_binary, all_data_family, data_families, fout, fam_out, stat_out, gpu=cls_gpu, multi=eval_multi)
+    utils.eval_classifier(args, classifier, end_date, X_data, y_data_binary, all_data_family,\
+                           data_families, fout, None, None, gpu=cls_gpu, multi=eval_multi)
 
     fout.close()
-    fam_out.close()
-    stat_out.close()
+    # fam_out.close()
+    # stat_out.close()
 
 def evaluate_valid_test_data(args, encoder, end_date, X_data, y_data, all_data_family, \
-                              cls_gpu, eval_multi, data_type, fout, fam_out, stat_out):
+                              cls_gpu, eval_multi, data_type, fout, fam_out=None, stat_out=None):
     data_families = set(all_data_family)
     # logging.info(f"Number of y_valid_family = {y_valid_family}")
     logging.info(f'All {data_type} family = {all_data_family}')
@@ -205,7 +212,7 @@ def evaluate_valid_test_data(args, encoder, end_date, X_data, y_data, all_data_f
     X_data_feat = get_train_feat(args, encoder, X_data)
 
     utils.eval_classifier(args, encoder, end_date, X_data_feat, y_data_binary, all_data_family, data_families, \
-                    fout, fam_out, stat_out, gpu = cls_gpu, multi = eval_multi)
+                    fout, None, None, gpu = cls_gpu, multi = eval_multi)
 
 
 def get_new_train_data(df, X_train_feat, y_train, y_train_binary, all_train_family,\
@@ -350,13 +357,6 @@ def main():
         evaluate_train_data(args, classifier, args.train_end, X_train_final, y_train_binary_final,\
                        all_train_family, train_families, cls_gpu, eval_multi=False, data_type='train')
 
-        # sample_out = open(args.result.split('.csv')[0]+'_sample_train.csv', 'w')
-        # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
-        # sample_out.flush()
-        # sample_explanation = open(args.result.split('.csv')[0]+'_sample_explanation_train.csv', 'w')
-        # sample_explanation.write('date\tCorrect\tWrong\tBenign\tMal\tNew_fam_cnt\tNew_fam\tUnique_fam\n')
-        # sample_explanation.flush()
-
         #--------------------------------------------------------------------------------------------------
         """
         Step (4): Prepare the validation dataset. Load the feature vectors and labels.
@@ -364,10 +364,10 @@ def main():
         # Validation data evaluation
         fout = open(args.result.split('.csv')[0]+'_valid.csv', 'w')
         fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-        fam_out = open(args.result.split('.csv')[0]+'_family_valid.csv', 'w')
-        fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-        stat_out = open(args.result.split('.csv')[0]+'_stat_valid.csv', 'w')
-        stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+        # fam_out = open(args.result.split('.csv')[0]+'_family_valid.csv', 'w')
+        # fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+        # stat_out = open(args.result.split('.csv')[0]+'_stat_valid.csv', 'w')
+        # stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
         for i in range(1, 7):
             valid_start = (dt.datetime.strptime(args.valid_start, '%Y-%m') + relativedelta(months=i-1)).strftime('%Y-%m')
@@ -379,7 +379,7 @@ def main():
                 
             # Valid data evaluation
             evaluate_valid_test_data(args, classifier, valid_end, X_valid, y_valid,\
-                       all_valid_family, cls_gpu, False, 'valid', fout, fam_out, stat_out)
+                       all_valid_family, cls_gpu, False, 'valid', fout)
         
         # sample_out = open(args.result.split('.csv')[0]+'_sample_valid.csv', 'w')
         # sample_out.write('date\tCount\tIndex\tTrue\tPred\tFamily\tScore\n')
@@ -419,10 +419,10 @@ def main():
     # Test data evaluation
     fout = open(args.result.split('.csv')[0]+'_'+substr+'_test.csv', 'w')
     fout.write('date\tTPR\tTNR\tFPR\tFNR\tACC\tPREC\tF1\n')
-    fam_out = open(args.result.split('.csv')[0]+'_'+substr+'_family_test.csv', 'w')
-    fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
-    stat_out = open(args.result.split('.csv')[0]+'_'+substr+'_stat_test.csv', 'w')
-    stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
+    # fam_out = open(args.result.split('.csv')[0]+'_'+substr+'_family_test.csv', 'w')
+    # fam_out.write('Month\tNew\tFamily\tFNR\tCnt\n')
+    # stat_out = open(args.result.split('.csv')[0]+'_'+substr+'_stat_test.csv', 'w')
+    # stat_out.write('date\tTotal\tTP\tTN\tFP\tFN\n')
 
     # for i in range(1, 13):
     # args.test_start = args.test_end
@@ -480,7 +480,8 @@ def main():
     
     # For Active learning, we will run for 100 epochs
     args.epochs = 100
-    for month in month_lists:
+
+    for month in tqdm(month_lists, desc="Processing months"):  # Add progress bar
         args.test_start = month
         args.test_end = month
     
@@ -489,7 +490,7 @@ def main():
             
         # Test data evaluation
         evaluate_valid_test_data(args, classifier, args.test_end, X_test, y_test,\
-                        all_test_family, cls_gpu, False, 'test', fout, fam_out, stat_out)
+                        all_test_family, cls_gpu, False, 'test', fout)
 
         logging.info(f'Test Run complete for Month {month}.')
         #--------------------------------------------------------------------------------------------------
@@ -528,9 +529,9 @@ def main():
     
     # finish writing the result file
     fout.close()
-    fam_out.close()
+    # fam_out.close()
     # sample_out.close()
-    stat_out.close()
+    # stat_out.close()
     # sample_score_out.close()
     # sample_explanation.close()
     return

@@ -1,6 +1,6 @@
 References:
 
-[1] Chen, Yizheng, Zhoujie Ding, and David Wagner. "Continuous learning for android malware detection." In 32nd USENIX Security Symposium (USENIX Security 23), pp. 1127-1144. 2023.
+[1] "Continuous learning for android malware detection." In 32nd USENIX Security Symposium (USENIX Security 23), pp. 1127-1144. 2023.
 
 Experimental Setup:
 Train data - 1 year
@@ -22,13 +22,47 @@ month)
 
 
 
-[2] Yang, Limin, Wenbo Guo, Qingying Hao, Arridhana Ciptadi, Ali Ahmadzadeh, Xinyu Xing, and Gang Wang. "{CADE}: Detecting and explaining concept drift samples for security applications." In 30th USENIX Security Symposium (USENIX Security 21), pp. 2327-2344. 2021.
+[2] "{CADE}: Detecting and explaining concept drift samples for security applications." In 30th USENIX Security Symposium (USENIX Security 21), pp. 2327-2344. 2021.
 
-[3] Barbero, Federico, Feargus Pendlebury, Fabio Pierazzi, and Lorenzo Cavallaro. "Transcending transcend: Revisiting malware classification in the presence of concept drift." In 2022 IEEE Symposium on Security and Privacy (SP), pp. 805-823. IEEE, 2022.
+Neural Network Architecture:
+  Drebin: 1340-512-128-32-7
+  IDS2018: 83-64-32-16-3
 
-[4] Jordaney, Roberto, Kumar Sharad, Santanu K. Dash, Zhi Wang, Davide Papini, Ilia Nouretdinov, and Lorenzo Cavallaro. "Transcend: Detecting concept drift in malware classification models." In 26th USENIX security symposium (USENIX security 17), pp. 625-642. 2017.
+Activation Function: ReLU
 
-[5] Afshar, Bahar Emami, Paula Branco, Tolga Kurt, Utku Gorkem Ketenci, and Hikmet Mazmanoglu. "To Label or to Pseudo Label? Active Learning vs Semi-Supervised Learning for Windows Malware Prediction."
+Optimizer:
+  Main Training: Adam
+  Explanation Loss Optimization: Adam
+
+Learning Rate:
+  Main Training: 0.0001
+  Explanation Loss Optimization: 0.01
+
+Epochs: 250
+
+Batch Size:
+  Drebin: 32
+  IDS2018: 256
+
+Contrastive Loss:
+  Lambda (λ): 0.1
+  Margin (m): 10
+
+MAD Thresholding:
+  TMAD: 3.5
+  Coefficient (b): 1.4826
+
+Explanation Loss:
+  Lambda1 (λ1): 0.001
+  Optimizer: Adam
+  Learning Rate: 0.01
+  Epochs: 250
+
+[3] "Transcending transcend: Revisiting malware classification in the presence of concept drift." In 2022 IEEE Symposium on Security and Privacy (SP), pp. 805-823. IEEE, 2022.
+
+[4] "Transcend: Detecting concept drift in malware classification models." In 26th USENIX security symposium (USENIX security 17), pp. 625-642. 2017.
+
+[5] "To Label or to Pseudo Label? Active Learning vs Semi-Supervised Learning for Windows Malware Prediction."
 
 [6] Hendrycks, Dan, Mantas Mazeika, Saurav Kadavath, and Dawn Song. "Using self-supervised learning can improve model robustness and uncertainty." Advances in neural information processing systems 32 (2019).
 

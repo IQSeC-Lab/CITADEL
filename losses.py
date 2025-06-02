@@ -429,3 +429,18 @@ class SSL_Loss(nn.Module):
         """
         confidence, _ = torch.max(probs, dim=-1)
         return confidence
+
+    def fix_match():
+        return None
+    
+
+class OOD_Loss(nn.Module):
+    def __init__(self):
+        super(OOD_Loss, self).__init__()
+        # reduce: whether use 'mean' reduction or keep sample loss
+        # self.reduce = reduce
+    
+    # Outlier Exposure loss (simplified)
+    def oe_loss(probs):
+        # probs = F.softmax(logits, dim=1)
+        return -torch.mean(torch.sum(torch.log(probs + 1e-10) / probs.size(1), dim=1))
