@@ -28,7 +28,7 @@ plt.rcParams.update({
 })
 
 
-strategy = "fixmatch_bit_flip_wo_al"
+strategy = "fixmatch_bit_flip_wo_al_bit_flip_1-4"
 
 # === Classifier Definition ===
 class Classifier(nn.Module):
@@ -74,9 +74,12 @@ def random_bit_flip(x, n_bits=1):
         x_aug[i, flip_indices] = 1 - x_aug[i, flip_indices]
     return x_aug
 
-def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabeled, test_sets_by_year, num_classes=2, threshold=0.95, lambda_u=1.0, epochs=50, batch_size=64):
+def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabeled, test_sets_by_year, num_classes=2, threshold=0.85, lambda_u=1.0, epochs=150, batch_size=64):
     labeled_ds = TensorDataset(X_labeled, y_labeled)
     unlabeled_ds = TensorDataset(X_unlabeled)
+
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
 
     labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
     unlabeled_loader = DataLoader(unlabeled_ds, batch_size=batch_size, shuffle=True)
@@ -101,7 +104,7 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
 
             # Apply random bit flip: weak (1 bit), strong (3 bits)
             x_u_w = random_bit_flip(x_u, n_bits=1)
-            x_u_s = random_bit_flip(x_u, n_bits=3)
+            x_u_s = random_bit_flip(x_u, n_bits=4)
 
             logits_x = model(x_l)
             loss_x = criterion(logits_x, y_l)
@@ -122,7 +125,7 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
             total_loss += loss.item()
 
         print(f"Epoch {epoch+1}: loss={total_loss:.4f}")
-
+        scheduler.step()
     # === Evaluate on each year's test set ===
 
     metrics_list = []
@@ -179,7 +182,7 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
 
     # Save results to CSV
     metrics_df = pd.DataFrame(metrics_list)
-    metrics_df.to_csv(f"{strategy}.csv", index=False)
+    metrics_df.to_csv(f"results/{strategy}.csv", index=False)
 
     print(f"Mean F1 Scores: {metrics_df['f1'].mean():.4f}")
     print(f"Mean False Negative Rates: {metrics_df['fnr'].mean()}")
@@ -191,7 +194,7 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
 # === Plotting Function ===
 import matplotlib.pyplot as plt
 
-def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_wo_al.png"):
+def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.png"):
     # Convert to list if Series
     years = list(years)
     f1s = list(f1s)
@@ -211,23 +214,26 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_wo_al.png"
     ax2.tick_params(axis="y", labelcolor="red")
     ax2.set_ylim(0, 1)
 
+    # Set only year (4-digit) on x-axis, sampled to reduce overlap
     xtick_positions = []
     xtick_labels = []
+    seen_years = set()
     for idx, ym in enumerate(years):
-        xtick_positions.append(idx)
-        xtick_labels.append(ym.split("-")[0])  # just the year
+        year = ym.split("_")[0]
+        if year not in seen_years:
+            xtick_positions.append(idx)
+            xtick_labels.append(year)
+            seen_years.add(year)
 
     ax1.set_xticks(xtick_positions)
-    ax1.set_xticklabels(xtick_labels, rotation=90)
+    ax1.set_xticklabels(xtick_labels, rotation=0)
 
-
-    plt.xticks(rotation=90)
-    fig.tight_layout()
-
-    # Add legend from both axes
+    # Add legend above plot to avoid overlapping x-label
     lines_1, labels_1 = ax1.get_legend_handles_labels()
     lines_2, labels_2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=2)
+    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper center', bbox_to_anchor=(0.5, 1.12), ncol=2)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(save_path, dpi=300)
     plt.show()
 
