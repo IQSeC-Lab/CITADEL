@@ -28,7 +28,7 @@ plt.rcParams.update({
 })
 
 
-strategy = "fixmatch_bit_flip_wo_al_bit_flip_1-4"
+strategy = "fixmatch_bit_flip_wo_al_bit_flip_"
 
 # === Classifier Definition ===
 class Classifier(nn.Module):
@@ -74,17 +74,27 @@ def random_bit_flip(x, n_bits=1):
         x_aug[i, flip_indices] = 1 - x_aug[i, flip_indices]
     return x_aug
 
-def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabeled, test_sets_by_year, num_classes=2, threshold=0.85, lambda_u=1.0, epochs=150, batch_size=64):
+def interleave(x, size):
+    s = list(x.shape)
+    return x.reshape([-1, size] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
+
+def de_interleave(x, size):
+    s = list(x.shape)
+    return x.reshape([size, -1] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
+
+def train_fixmatch_drift_eval(
+    bit_flip, model, optimizer, X_labeled, y_labeled, X_unlabeled, test_sets_by_year,
+    num_classes=2, threshold=0.85, lambda_u=1.0, epochs=200, batch_size=64
+):
     labeled_ds = TensorDataset(X_labeled, y_labeled)
     unlabeled_ds = TensorDataset(X_unlabeled)
-
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-
-
     labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
     unlabeled_loader = DataLoader(unlabeled_ds, batch_size=batch_size, shuffle=True)
-
     criterion = nn.CrossEntropyLoss()
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+    mu = 1  # Number of unlabeled augmentations per sample (FixMatch default is 1)
+    interleave_size = 2 * mu + 1  # labeled, unlabeled_weak, unlabeled_strong
 
     for epoch in range(epochs):
         model.train()
@@ -102,21 +112,32 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
             x_l, y_l = x_l.cuda(), y_l.cuda()
             x_u = x_u.cuda()
 
-            # Apply random bit flip: weak (1 bit), strong (3 bits)
+            # Weak and strong augmentations for unlabeled data
             x_u_w = random_bit_flip(x_u, n_bits=1)
-            x_u_s = random_bit_flip(x_u, n_bits=4)
+            x_u_s = random_bit_flip(x_u, n_bits=bit_flip)
 
-            logits_x = model(x_l)
+            # Interleave all inputs for batchnorm consistency
+            inputs = torch.cat([x_l, x_u_w, x_u_s], dim=0)
+            inputs = interleave(inputs, interleave_size)
+
+            logits = model(inputs)
+            logits = de_interleave(logits, interleave_size)
+
+            batch_size = x_l.shape[0]
+            logits_x = logits[:batch_size]
+            logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
+
+            # Labeled loss
             loss_x = criterion(logits_x, y_l)
 
+            # Unlabeled loss (FixMatch pseudo-labeling)
             with torch.no_grad():
-                pseudo_logits = F.softmax(model(x_u_w), dim=1)
+                pseudo_logits = F.softmax(logits_u_w, dim=1)
                 pseudo_labels = torch.argmax(pseudo_logits, dim=1)
                 max_probs, _ = torch.max(pseudo_logits, dim=1)
                 mask = max_probs.ge(threshold).float()
 
-            logits_u = model(x_u_s)
-            loss_u = (F.cross_entropy(logits_u, pseudo_labels, reduction='none') * mask).mean()
+            loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
             loss = loss_x + lambda_u * loss_u
 
             optimizer.zero_grad()
@@ -144,9 +165,9 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
                 y_score = probs.cpu().numpy()  # for multi-class
 
             acc = accuracy_score(y_true, y_pred)
-            prec = precision_score(y_true, y_pred, average='weighted', zero_division=0)
-            rec = recall_score(y_true, y_pred, average='weighted', zero_division=0)
-            f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+            prec = precision_score(y_true, y_pred, zero_division=0)
+            rec = recall_score(y_true, y_pred, zero_division=0)
+            f1 = f1_score(y_true, y_pred, zero_division=0)
             cm = confusion_matrix(y_true, y_pred)
             if cm.shape == (2, 2):
                 tn, fp, fn, tp = cm.ravel()
@@ -182,12 +203,12 @@ def train_fixmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabele
 
     # Save results to CSV
     metrics_df = pd.DataFrame(metrics_list)
-    metrics_df.to_csv(f"results/{strategy}.csv", index=False)
+    metrics_df.to_csv(f"results/{strategy+str(bit_flip)}.csv", index=False)
 
     print(f"Mean F1 Scores: {metrics_df['f1'].mean():.4f}")
     print(f"Mean False Negative Rates: {metrics_df['fnr'].mean()}")
     print(f"Mean False Positive Rates: {metrics_df['fpr'].mean()}")
-    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/{strategy}_f1_fnr_plot.png")
+    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/{strategy+str(bit_flip)}_f1_fnr_plot.png")
 
     # Optionally, update your plotting function to use metrics_df if you want to plot other metrics.
 
@@ -242,6 +263,10 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.pn
 
 # === Main Execution ===
 if __name__ == "__main__":
+    # here we take the number of bit flip as argument
+    
+
+
     print(f"Running {strategy}...")
     # Load data
     path = "/home/mhaque3/myDir/data/gen_apigraph_drebin/"
@@ -249,10 +274,17 @@ if __name__ == "__main__":
     data = np.load(file_path, allow_pickle=True)
     X, y = data['X_train'], data['y_train']
     y = np.array([0 if label == 0 else 1 for label in y])
+    
+    import sys
+    if len(sys.argv) > 1:
+        n_bit_flip = int(sys.argv[1])
+    else:
+        n_bit_flip = X.shape[1] // 100  # Default to 1% of features
+    print(f"Using {n_bit_flip} bits to flip per sample.")
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_labeled, y_labeled, X_unlabeled, _ = split_labeled_unlabeled(X_scaled, y, labeled_ratio=0.4)
+    # scaler = StandardScaler()
+    # X_scaled = scaler.fit_transform(X)
+    X_labeled, y_labeled, X_unlabeled, _ = split_labeled_unlabeled(X, y, labeled_ratio=0.4)
 
     X_2012_labeled = torch.tensor(X_labeled, dtype=torch.float32).cuda()
     y_2012_labeled = torch.tensor(y_labeled, dtype=torch.long).cuda()
@@ -269,8 +301,8 @@ if __name__ == "__main__":
                 data = np.load(f"{path}{year}-{month:02d}_selected.npz")
                 X_raw = data["X_train"]
                 y_true = (data["y_train"] > 0).astype(int)
-                X_scaled = scaler.transform(X_raw)
-                X_tensor = torch.tensor(X_scaled, dtype=torch.float32).cuda()
+                # X_scaled = scaler.transform(X_raw)
+                X_tensor = torch.tensor(X_raw, dtype=torch.float32).cuda()
                 y_tensor = torch.tensor(y_true, dtype=torch.long).cuda()
                 test_sets_by_year[f"{year}_{month}"] = (X_tensor, y_tensor)
             except FileNotFoundError:
@@ -278,8 +310,9 @@ if __name__ == "__main__":
 
     model = Classifier(input_dim=input_dim, num_classes=num_classes).cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
+    
     train_fixmatch_drift_eval(
+        n_bit_flip,
         model,
         optimizer,
         X_2012_labeled,

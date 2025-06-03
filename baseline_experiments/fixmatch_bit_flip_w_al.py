@@ -91,9 +91,9 @@ def evaluate_model(model, X_test, y_test, num_classes=2):
             y_score = probs.cpu().numpy()  # for multi-class
 
         acc = accuracy_score(y_true, y_pred)
-        prec = precision_score(y_true, y_pred, average='weighted', zero_division=0)
-        rec = recall_score(y_true, y_pred, average='weighted', zero_division=0)
-        f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+        prec = precision_score(y_true, y_pred, zero_division=0)
+        rec = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
         cm = confusion_matrix(y_true, y_pred)
         if cm.shape == (2, 2):
             tn, fp, fn, tp = cm.ravel()
@@ -129,7 +129,7 @@ def evaluate_model(model, X_test, y_test, num_classes=2):
 # === Main Training Function for FixMatch with AL and taking best loss model weight===
 def train_fixmatch_drift_eval(
     model, optimizer, X_labeled, y_labeled, X_unlabeled, test_sets_by_year,
-    num_classes=2, threshold=0.85, lambda_u=1.0, epochs=150, retrain_epochs=50, batch_size=64
+    num_classes=2, threshold=0.90, lambda_u=1.0, epochs=200, retrain_epochs=70, batch_size=64
 ):
     # Initial training on labeled + unlabeled data
     labeled_ds = TensorDataset(X_labeled, y_labeled)
@@ -157,7 +157,7 @@ def train_fixmatch_drift_eval(
             x_l, y_l = x_l.cuda(), y_l.cuda()
             x_u = x_u.cuda()
             x_u_w = random_bit_flip(x_u, n_bits=1)
-            x_u_s = random_bit_flip(x_u, n_bits=4)
+            x_u_s = random_bit_flip(x_u, n_bits=13)
 
             logits_x = model(x_l)
             loss_x = criterion(logits_x, y_l)
@@ -225,7 +225,7 @@ def train_fixmatch_drift_eval(
                 x_l, y_l = x_l.cuda(), y_l.cuda()
                 x_u = x_u.cuda()
                 x_u_w = random_bit_flip(x_u, n_bits=1)
-                x_u_s = random_bit_flip(x_u, n_bits=4)
+                x_u_s = random_bit_flip(x_u, n_bits=13)
 
                 logits_x = model(x_l)
                 loss_x = criterion(logits_x, y_l)
@@ -258,7 +258,7 @@ def train_fixmatch_drift_eval(
     print(f"Mean F1 Scores: {metrics_df['f1'].mean():.4f}")
     print(f"Mean False Negative Rates: {metrics_df['fnr'].mean():.4f}")
     print(f"Mean False Positive Rates: {metrics_df['fpr'].mean():.4f}")
-    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/f1_fnr_{strategy}_aug_0.1.png")
+    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/f1_fnr_{strategy}.png")
 
     return metrics_df
 
@@ -391,14 +391,14 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.pn
 
     fig, ax1 = plt.subplots(figsize=(12, 6))
     ax1.set_xlabel("Year")
-    ax1.set_ylabel("F1 Score", color="blue")
+    # ax1.set_ylabel("F1 Score", color="blue")
     ax1.plot(years, f1s, color="blue", label="F1 Score")
     ax1.tick_params(axis="y", labelcolor="blue")
     ax1.set_ylim(0, 1)
     ax1.grid(True, which='both', linestyle='--', alpha=0.7)
 
     ax2 = ax1.twinx()
-    ax2.set_ylabel("False Negative Rate (FNR)", color="red")
+    # ax2.set_ylabel("False Negative Rate (FNR)", color="red")
     ax2.plot(years, fnrs, color="red", label="FNR")
     ax2.tick_params(axis="y", labelcolor="red")
     ax2.set_ylim(0, 1)
@@ -433,12 +433,13 @@ if __name__ == "__main__":
     path = "/home/mhaque3/myDir/data/gen_apigraph_drebin/"
     file_path = f"{path}2012-01to2012-12_selected.npz"
     data = np.load(file_path, allow_pickle=True)
-    X, y = data['X_train'], data['y_train']
+    X, y, y_family = data['X_train'], data['y_train'], data['y_mal_family']
+    ben_family = X.shape[0] - y_family.shape[0]
+    ben_family = ['benign' for _ in range(ben_family)]
+    y_family = np.concatenate((y_family, ben_family), axis=0)
     y = np.array([0 if label == 0 else 1 for label in y])
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_labeled, y_labeled, X_unlabeled, _ = split_labeled_unlabeled(X_scaled, y, labeled_ratio=0.4)
+    X_labeled, y_labeled, X_unlabeled, _ = split_labeled_unlabeled(X, y, labeled_ratio=0.4)
 
     X_2012_labeled = torch.tensor(X_labeled, dtype=torch.float32).cuda()
     y_2012_labeled = torch.tensor(y_labeled, dtype=torch.long).cuda()
@@ -455,10 +456,13 @@ if __name__ == "__main__":
                 data = np.load(f"{path}{year}-{month:02d}_selected.npz")
                 X_raw = data["X_train"]
                 y_true = (data["y_train"] > 0).astype(int)
-                X_scaled = scaler.transform(X_raw)
-                X_tensor = torch.tensor(X_scaled, dtype=torch.float32).cuda()
+                y_fam_test = data["y_mal_family"]
+                ben_family = X_raw.shape[0] - y_family.shape[0]
+                ben_family = ['benign' for _ in range(ben_family)]
+                y_test_family = np.concatenate((y_fam_test, ben_family), axis=0)
+                X_tensor = torch.tensor(X_raw, dtype=torch.float32).cuda()
                 y_tensor = torch.tensor(y_true, dtype=torch.long).cuda()
-                test_sets_by_year[f"{year}_{month}"] = (X_tensor, y_tensor)
+                test_sets_by_year[f"{year}_{month}"] = (X_tensor, y_tensor, y_test_family)
             except FileNotFoundError:
                 continue
 
