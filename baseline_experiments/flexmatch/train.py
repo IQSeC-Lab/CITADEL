@@ -21,11 +21,17 @@ import eval
 import utils
 from utils import Classifier
 import logging
+import binary_smote
 
-strategy = "flexmatch_bit_flip_wo_al_bit_flip_1-4"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+strategy = "flexmatch_bit_flip_wo_al_bit_masking"
 
 def train_flexmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabeled, \
-                               test_sets_by_year, num_classes=2, threshold=0.85, lambda_u=1.0, \
+                               test_sets_by_year, num_classes=2, threshold=0.75, lambda_u=1.0, \
                                   epochs=250, batch_size=64):
     labeled_ds = TensorDataset(X_labeled, y_labeled)
     unlabeled_ds = TensorDataset(X_unlabeled)
@@ -66,8 +72,11 @@ def train_flexmatch_drift_eval(model, optimizer, X_labeled, y_labeled, X_unlabel
             u_i = torch.arange(x_u.size(0)).to(x_u.device)
 
             # Apply random bit flip: weak (1 bit), strong (3 bits)
-            x_u_w = utils.random_bit_flip(x_u, n_bits=1)
-            x_u_s = utils.random_bit_flip(x_u, n_bits=4)
+            # x_u_w = binary_smote.weak_augment_batch(x_u).cuda() #utils.random_bit_flip(x_u, n_bits=1)
+            # x_u_s = binary_smote.strong_augment_batch(x_u).cuda() #utils.random_bit_flip(x_u, n_bits=4)
+
+            x_u_w = torch.tensor(binary_smote.weak_augment_batch(x_u, 0.03), dtype=x_u.dtype, device=x_u.device)
+            x_u_s = torch.tensor(binary_smote.strong_augment_batch(x_u, 0.15), dtype=x_u.dtype, device=x_u.device)
 
             xw_pred = model(x_l)
             # loss_x = criterion(logits_x, y_l)
@@ -146,9 +155,9 @@ if __name__ == "__main__":
     X, y = data['X_train'], data['y_train']
     y = np.array([0 if label == 0 else 1 for label in y])
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_labeled, y_labeled, X_unlabeled, _ = utils.split_labeled_unlabeled(X_scaled, y, labeled_ratio=0.4)
+    # scaler = StandardScaler()
+    # X_scaled = scaler.fit_transform(X)
+    X_labeled, y_labeled, X_unlabeled, _ = utils.split_labeled_unlabeled(X, y, labeled_ratio=0.4)
 
     X_2012_labeled = torch.tensor(X_labeled, dtype=torch.float32).cuda()
     y_2012_labeled = torch.tensor(y_labeled, dtype=torch.long).cuda()
@@ -164,8 +173,8 @@ if __name__ == "__main__":
                 data = np.load(f"{path}{year}-{month:02d}_selected.npz")
                 X_raw = data["X_train"]
                 y_true = (data["y_train"] > 0).astype(int)
-                X_scaled = scaler.transform(X_raw)
-                X_tensor = torch.tensor(X_scaled, dtype=torch.float32).cuda()
+                # X_scaled = scaler.transform(X_raw)
+                X_tensor = torch.tensor(X_raw, dtype=torch.float32).cuda()
                 y_tensor = torch.tensor(y_true, dtype=torch.long).cuda()
                 test_sets_by_year[f"{year}_{month}"] = (X_tensor, y_tensor)
             except FileNotFoundError:

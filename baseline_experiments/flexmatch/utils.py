@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 # === Classifier Definition ===
 class Classifier(nn.Module):
@@ -55,58 +56,64 @@ def mapping_func(mode='convex'):
         return lambda x: x / (2 - x)
     
 
-def bit_flipping(X_labeled, X_unlabeled, flip_ratio_weak, flip_ratio_strong):
-    # Example unlabeled and labeled sets
-    # X_unlabeled = np.array([
-    #     [1, 0, 1, 0],
-    #     [0, 1, 1, 1]
-    # ])
+def bit_flipping(X_labeled, y_labeled, X_unlabeled, flip_ratio_weak=0.05, flip_ratio_strong=0.20, batch_size=64):
+    
+    if isinstance(X_unlabeled, torch.Tensor):
+        X_unlabeled = X_unlabeled.cpu().numpy()
+    if isinstance(X_labeled, torch.Tensor):
+        X_labeled = X_labeled.cpu().numpy()
+    if isinstance(y_labeled, torch.Tensor):
+        y_labeled = y_labeled.cpu().numpy()
 
-    # X_labeled = np.array([
-    #     [1, 0, 0, 0],
-    #     [0, 1, 1, 0],
-    #     [1, 1, 1, 1]
-    # ])
+    # Ensure binary integer type for bitwise ops
+    X_unlabeled = X_unlabeled.astype(np.uint8)
+    X_labeled = X_labeled.astype(np.uint8)
 
-    # Step 1: Compute Hamming distances
-    hamming_dist = np.sum(X_unlabeled[:, np.newaxis, :] != X_labeled[np.newaxis, :, :], axis=2)
-
-    # Step 2: Choose the closest labeled sample for each unlabeled sample
-    closest_indices = np.argmin(hamming_dist, axis=1)
-    farthest_indices = np.argmax(hamming_dist, axis=1)
-    # Step 3: Flip 50% of mismatched bits
+    n_unlabeled = X_unlabeled.shape[0]
     X_modified_weak = X_unlabeled.copy()
     X_modified_strong = X_unlabeled.copy()
 
-    for i, closest_idx in enumerate(closest_indices):
-        x_u = X_unlabeled[i]
-        x_l = X_labeled[closest_idx]
-        
-        # Find mismatched positions
-        mismatches = np.where(x_u != x_l)[0]
-        
-        # Select 50% of mismatches (rounded down)
-        num_to_flip = len(mismatches) * flip_ratio_weak
-        if num_to_flip > 0:
-            flip_indices = np.random.choice(mismatches, size=num_to_flip, replace=False)
-            X_modified_weak[i, flip_indices] = 1 - X_modified_weak[i, flip_indices]  # Flip bits
+    # Getting the sample indices which are malwares
+    # we will be augmenting all samples in X_unlabeld w.r.t X_labels that means only malware families
+    pos_indices = np.where(y_labeled > 0)[0]
+    X_labeled = X_labeled[pos_indices]
 
-    for i, farthest_idx in enumerate(farthest_indices):
-        x_u = X_unlabeled[i]
-        x_l = X_labeled[farthest_idx]
-        
-        # Find mismatched positions
-        mismatches = np.where(x_u != x_l)[0]
-        
-        # Select 50% of mismatches (rounded down)
-        num_to_flip = len(mismatches) * flip_ratio_strong
-        if num_to_flip > 0:
-            flip_indices = np.random.choice(mismatches, size=num_to_flip, replace=False)
-            X_modified_strong[i, flip_indices] = 1 - X_modified_strong[i, flip_indices]  # Flip bits
+    min_hamming, max_hamming = 1000009, -1
 
-    # print("Original X_unlabeled:")
-    # print(X_unlabeled)
-    # print("Modified X_unlabeled (50% flipped where mismatched):")
-    # print(X_modified)
+    for start in tqdm(range(0, n_unlabeled, batch_size), desc="Bit Flipping Batches"):
+        end = min(start + batch_size, n_unlabeled)
+        X_batch = X_unlabeled[start:end]
 
-    return X_modified_weak, X_modified_strong
+        # Compute Hamming distances: shape (batch_size, n_labeled)
+        diff = X_batch[:, np.newaxis, :] != X_labeled[np.newaxis, :, :]
+        hamming_dist = np.sum(diff, axis=2)
+        # Save the hamming distance for this batch to a file
+
+        min_hamming = min(min_hamming, hamming_dist.min())
+        max_hamming = max(max_hamming, hamming_dist.max())
+        # all_hamming = []
+
+        closest_indices = np.argmin(hamming_dist, axis=1)
+        farthest_indices = np.argmax(hamming_dist, axis=1)
+
+        for i, (x_u, close_idx, far_idx) in enumerate(zip(X_batch, closest_indices, farthest_indices)):
+            abs_i = start + i  # global index in X_unlabeled
+
+            # Weak flip (closest)
+            x_l_close = X_labeled[close_idx]
+            mismatch_weak = np.where(x_u != x_l_close)[0]
+            n_weak = int(len(mismatch_weak) * flip_ratio_weak)
+            if n_weak > 0:
+                flip_indices = np.random.choice(mismatch_weak, size=n_weak, replace=False)
+                X_modified_weak[abs_i, flip_indices] ^= 1
+
+            # Strong flip (farthest)
+            x_l_far = X_labeled[far_idx]
+            mismatch_strong = np.where(x_u != x_l_far)[0]
+            n_strong = int(len(mismatch_strong) * flip_ratio_strong)
+            if n_strong > 0:
+                flip_indices = np.random.choice(mismatch_strong, size=n_strong, replace=False)
+                X_modified_strong[abs_i, flip_indices] ^= 1
+
+    return torch.tensor(X_modified_weak), torch.tensor(X_modified_strong), min_hamming, max_hamming
+
