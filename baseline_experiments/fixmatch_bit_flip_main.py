@@ -18,6 +18,7 @@ from sklearn.metrics import (
     confusion_matrix, roc_auc_score, average_precision_score
 )
 
+
 # Global font settings
 plt.rcParams.update({
     "font.size": 14,
@@ -33,6 +34,84 @@ plt.rcParams.update({
 
 # define strategy as global variable
 strategy = ""
+
+
+
+
+class CNNClassifier(nn.Module):
+    def __init__(self, input_dim, num_classes):
+        """
+        A 1D CNN for binary vector classification.
+
+        Args:
+            input_dim (int): The length of the input binary vector.
+            num_classes (int): The number of output classes.
+        """
+        super().__init__()
+        
+        # Feature extractor using 1D convolutional blocks
+        self.feature_extractor = nn.Sequential(
+            # --- Block 1 ---
+            # Input shape: (N, 1, input_dim) -> Output shape: (N, 64, input_dim / 2)
+            nn.Conv1d(in_channels=1, out_channels=64, kernel_size=7, stride=1, padding=3),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            
+            # --- Block 2 ---
+            # Input shape: (N, 64, input_dim / 2) -> Output shape: (N, 128, input_dim / 4)
+            nn.Conv1d(in_channels=64, out_channels=128, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            
+            # --- Block 3 ---
+            # Input shape: (N, 128, input_dim / 4) -> Output shape: (N, 256, input_dim / 8)
+            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+
+            # --- Adaptive Pooling ---
+            # Reduces the sequence length to 1, resulting in a fixed-size output
+            # Output shape: (N, 256, 1)
+            nn.AdaptiveMaxPool1d(1)
+        )
+        
+        # Classifier Head
+        self.classifier = nn.Sequential(
+            nn.Linear(256, 128), # Input features is the number of out_channels from last conv block
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, num_classes)
+        )
+
+    def forward(self, x):
+        """
+        Forward pass of the model.
+        
+        Args:
+            x (Tensor): Input tensor of shape (batch_size, input_dim)
+        
+        Returns:
+            Tensor: Logits of shape (batch_size, num_classes)
+        """
+        # 1. Reshape flat vector to a sequence with 1 channel: (N, input_dim) -> (N, 1, input_dim)
+        x = x.unsqueeze(1)
+        
+        # 2. Pass through convolutional feature extractor
+        features = self.feature_extractor(x)
+        
+        # 3. Flatten the features for the classifier: (N, 256, 1) -> (N, 256)
+        features_flat = features.view(features.size(0), -1)
+        
+        # 4. Pass through the final classification head
+        logits = self.classifier(features_flat)
+        
+        return logits
 
 
 # === Classifier Definition ===
@@ -53,6 +132,7 @@ class Classifier(nn.Module):
         )
     def forward(self, x):
         return self.classifier(self.encoder(x))
+
 
 
 def get_cosine_schedule_with_warmup(optimizer,
@@ -150,7 +230,8 @@ def train_fixmatch_drift_eval(
 
     labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=batch_size, drop_last=True)
     unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=batch_size, drop_last=True)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(reduction='mean')
+
     
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
     scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, epochs)
@@ -289,19 +370,19 @@ def train_fixmatch_drift_eval(
                         'pr_auc': pr_auc
                     })
 
-                    print(f"Year {year}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, FNR={fnr:.4f}, FPR={fpr:.4f}, ROC-AUC={roc_auc:.4f}, PR-AUC={pr_auc:.4f}")
+                    print(f"Year {year}_{month}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, FNR={fnr:.4f}, FPR={fpr:.4f}, ROC-AUC={roc_auc:.4f}, PR-AUC={pr_auc:.4f}")
 
                 except FileNotFoundError:
                     continue
 
     # Save results to CSV
     metrics_df = pd.DataFrame(metrics_list)
-    metrics_df.to_csv(f"results/baselines_5runs/{strategy}.csv", index=False)
+    metrics_df.to_csv(f"results/baseline_2runs/{strategy}.csv", index=False)
 
     print(f"Mean F1 Scores: {metrics_df['f1'].mean():.4f}")
     print(f"Mean False Negative Rates: {metrics_df['fnr'].mean()}")
     print(f"Mean False Positive Rates: {metrics_df['fpr'].mean()}")
-    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/baselines_5runs/{strategy}_f1_fnr_plot.png")
+    plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], save_path=f"results/baseline_2runs/{strategy}_f1_fnr_plot.png")
     # Optionally, update your plotting function to use metrics_df if you want to plot other metrics.
 
 # === Plotting Function ===
@@ -332,7 +413,7 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.pn
     xtick_labels = []
     seen_years = set()
     for idx, ym in enumerate(years):
-        year = ym.split("-")[0]
+        year = ym.split("_")[0]
         if year not in seen_years:
             xtick_positions.append(idx)
             xtick_labels.append(year)
@@ -356,13 +437,12 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.pn
 # === Main Execution ===
 if __name__ == "__main__":
     import argparse
-    import random
-
-    parser = argparse.ArgumentParser(description="Run FixMatch with Bit Flip Augmentation")
+    print(f"Process started with PID: {os.getpid()}", flush=True)
+    parser = argparse.ArgumentParser(description="Run FixMatch with Bit Flip Augmentation on MLP")
     parser.add_argument("--bit_flip", type=int, default=11, help="Number of bits to flip per sample")
     parser.add_argument("--labeled_ratio", type=float, default=0.4, help="Ratio of labeled data")
     parser.add_argument("--aug", type=str, default="random_bit_flip", help="Augmentation function to use")
-    parser.add_argument("--seed", type=int, default=1, help="Random seed for reproducibility")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     parser.add_argument('--lambda-u', default=1, type=float, help='coefficient of unlabeled loss')
     parser.add_argument('--T', default=1, type=float, help='pseudo label temperature')
     parser.add_argument('--wdecay', default=5e-4, type=float, help='weight decay')
@@ -370,17 +450,12 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument('--lr', '--learning-rate', default=0.03, type=float, help='initial learning rate')
     parser.add_argument('--warmup', default=0, type=float, help='warmup epochs (unlabeled data based)')
-    
     args = parser.parse_args()
+    
 
     # Set random seeds for reproducibility
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
     # Load data
     path = "/home/mhaque3/myDir/data/gen_apigraph_drebin/"
@@ -420,7 +495,6 @@ if __name__ == "__main__":
     #             continue
 
     model = Classifier(input_dim=input_dim, num_classes=num_classes).cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     no_decay = ['bias', 'bn']
     grouped_parameters = [
