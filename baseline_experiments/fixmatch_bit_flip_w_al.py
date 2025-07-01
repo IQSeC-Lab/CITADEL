@@ -36,7 +36,6 @@ plt.rcParams.update({
 # define strategy as global variable
 strategy = ""
 
-
 # === Classifier Definition ===
 class Classifier(nn.Module):
     def __init__(self, input_dim, num_classes):
@@ -70,8 +69,6 @@ def get_cosine_schedule_with_warmup(optimizer,
         return max(0., math.cos(math.pi * num_cycles * no_progress))
 
     return LambdaLR(optimizer, _lr_lambda, last_epoch)
-
-
 
 def split_labeled_unlabeled(X, y, labeled_ratio=0.1, stratify=True, random_state=42):
     n_samples = len(X)
@@ -433,6 +430,7 @@ def active_learning_fixmatch(
                         mask = max_probs.ge(threshold).float()
                     loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
                     loss = loss_x + lambda_u * loss_u
+                    
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
