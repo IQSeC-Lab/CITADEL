@@ -105,13 +105,19 @@ def random_bit_flip_bernoulli(x, p=None, n_bits=None):
     x_aug = x.clone()
     batch_size, num_features = x.shape
     device = x.device
-    if n_bits is not None:
-        p = float(n_bits * 10) / num_features
+
+    if p is not None:
+        p = float(p)
     else:
-        if p is None:
-            p = 0.01  # default
-        else:
-            p = float(p)
+        p = 0.01  # default
+
+    # if n_bits is not None:
+    #     p = float(n_bits * 10) / num_features
+    # else:
+    #     if p is None:
+    #         p = 0.01  # default
+    #     else:
+    #         p = float(p)
     flip_mask = torch.bernoulli(torch.full_like(x_aug, p, device=device))
     x_aug = torch.abs(x_aug - flip_mask)
     return x_aug
@@ -336,33 +342,16 @@ def active_learning_fixmatch(
                     fpr = metrics['fpr']
                     roc_auc = metrics['roc_auc']
                     pr_auc = metrics['pr_auc']
-                    metrics_list.append()
+                    metrics_list.append(metrics)
 
                     print(f"Year {year_month}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, FNR={fnr:.4f}, FPR={fpr:.4f}, ROC-AUC={roc_auc:.4f}, PR-AUC={pr_auc:.4f}")
 
             except FileNotFoundError:
                 continue
             # --- Active learning: select most uncertain samples from X_unlabeled ---
-            # model.eval()
-            # with torch.no_grad():
-            #     unlabeled_probs = torch.softmax(model(X_unlabeled), dim=1)
-            #     max_probs, _ = torch.max(unlabeled_probs, dim=1)
-            #     # Select indices with lowest confidence
-            #     uncertain_indices = torch.topk(-max_probs, al_batch_size).indices
-            #     X_new = X_unlabeled[uncertain_indices]
-                
-
-            # # Remove selected from X_unlabeled
-            # mask = torch.ones(X_unlabeled.size(0), dtype=torch.bool, device=X_unlabeled.device)
-            # mask[uncertain_indices] = False
-            # X_unlabeled = X_unlabeled[mask]
-
-            # Optionally, add X_new and y_new to X_labeled and y_labeled if you have labels
-
-            # Retrain model for a few epochs
-            # labeled_ds = TensorDataset(X_labeled, y_labeled)
-            # concatenate X_new with X_unlabeled
+            # X_unlabeled = X_test.clone()
             X_unlabeled = torch.cat([X_unlabeled, X_test], dim=0)
+
             unlabeled_ds = TensorDataset(X_unlabeled)
 
             labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=al_batch_size, drop_last=True)
