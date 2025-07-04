@@ -10,6 +10,7 @@ import plot_gen
 import numpy as np
 import torch.nn.functional as F
 import faiss
+from sklearn.metrics import pairwise_distances
 
 
 def model_evaluate(model, test_sets_by_year, strategy):
@@ -263,7 +264,58 @@ def batch_pseudo_loss_selector(unlabeled_embeddings, pseudo_labels, train_embedd
 
     return scores
 
-def faiss_batch_pseudo_loss_selector(unlabeled_embeddings, pseudo_labels, train_embeddings, train_labels, margin=1.0, k=63):
+
+def get_top_k_neighbors(train_embed, unlabeled_embed, K=63, p_value=2, dim=1, device='cuda'):
+    """
+    Get the top-k nearest neighbors for each unlabeled embedding from the training embeddings.
+
+    Args:
+        unlabeled_embeddings (torch.Tensor): [N, D] normalized embeddings of unlabeled data
+        train_embeddings (torch.Tensor): [T, D] normalized embeddings of training data
+        k (int): number of nearest neighbors to consider
+
+    Returns:
+        torch.Tensor: [N, k] indices of the top-k nearest neighbors in the training set
+    """
+    # dists = torch.cdist(unlabeled_embeddings, train_embeddings, p=2)  # [N, T]
+    # D_k, top_k_indices = torch.topk(dists, k=k, largest=False)  # [N, k]
+    # Choose your p-value
+    p_value = 1.5  # or 1 for L1, 2 for L2, np.inf for L-infinity
+
+    # if p_value == 2:
+    #     # Convert to numpy for FAISS
+    #     train_np = train_embed.detach().cpu().numpy().astype(np.float32)
+    #     query_np = unlabeled_embed.detach().cpu().numpy().astype(np.float32)
+    #     # Build FAISS index and perform search
+    #     index = faiss.IndexFlatL2(dim)
+    #     index.add(train_np)
+    #     D_k, I_k = index.search(query_np, K)  # D_k: [N, k], I_k: [N, k]
+
+    #     # Convert back to torch tensors
+    #     D_k = torch.tensor(D_k, device=device)        # distances
+    #     I_k = torch.tensor(I_k, device=device)        # indices
+    # else:
+    train_torch = torch.tensor(train_embed, device='cuda')  # move to GPU
+    query_torch = torch.tensor(unlabeled_embed, device='cuda')
+
+    # Compute L2 distance: ||x - y||^2 = sum((x - y)^2)
+    # Shape: [N, T] where N = num queries, T = num training
+    dists = torch.cdist(query_torch, train_torch, p=p_value)
+
+    # Get top-k
+    D_k, I_k = torch.topk(dists, k=K, dim=1, largest=False)
+    # # Compute pairwise distances
+    # dist_matrix = pairwise_distances(query_np, train_np, metric='minkowski', p=p_value)  # shape: [N, T]
+
+    # # Find indices of top-k nearest neighbors
+    # I_k_np = dist_matrix.argsort(axis=1)[:, :K]
+    # D_k_np = np.take_along_axis(dist_matrix, I_k_np, axis=1)
+    # D_k = torch.tensor(D_k_np, device=device)
+    # I_k = torch.tensor(I_k_np, device=device)
+
+    return D_k, I_k
+
+def faiss_batch_pseudo_loss_selector(unlabeled_embeddings, pseudo_labels, train_embeddings, train_labels, margin=1.0, k=63, P=2):
     """
     Use FAISS to compute pseudo contrastive loss for a batch of unlabeled embeddings.
 
@@ -281,18 +333,8 @@ def faiss_batch_pseudo_loss_selector(unlabeled_embeddings, pseudo_labels, train_
     device = unlabeled_embeddings.device
     N, D = unlabeled_embeddings.shape
 
-    # Convert to numpy for FAISS
-    train_np = train_embeddings.detach().cpu().numpy().astype(np.float32)
-    query_np = unlabeled_embeddings.detach().cpu().numpy().astype(np.float32)
-
-    # Build FAISS index and perform search
-    index = faiss.IndexFlatL2(D)
-    index.add(train_np)
-    D_k, I_k = index.search(query_np, k)  # D_k: [N, k], I_k: [N, k]
-
-    # Convert back to torch tensors
-    D_k = torch.tensor(D_k, device=device)        # distances
-    I_k = torch.tensor(I_k, device=device)        # indices
+    D_k, I_k = get_top_k_neighbors(train_embeddings, unlabeled_embeddings, K=k, p_value=P, dim=D, device=device)
+    
     train_labels = train_labels.to(device)
 
     # Get neighbor labels

@@ -25,6 +25,8 @@ import logging
 import random
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 import argparse
+import time
+import csv
 
 
 logging.basicConfig(
@@ -110,9 +112,6 @@ class FixMatch:
         # loss_x = self.criterion(logits_x, y_lb)
 
         loss_x, lhc_val, lce_val = self.cal_loss(x_lb, y_lb, y_bin_lb)
-        # print(f"Supervised loss: {loss_x.item()}")
-        # print(f"Supervised Hierarchical Contrastive loss: {lhc_val}")
-        # print(f"Supervised Classification loss: {lce_val}")
         
         with torch.no_grad():
             logits_u_w, logits_u_s = self.model(x_ulb_w)[-1], self.model(x_ulb_s)[-1]
@@ -121,11 +120,10 @@ class FixMatch:
             pseudo_labels = (logits_u_w >= 0.5).float()
             loss_u = (F.binary_cross_entropy(logits_u_s, pseudo_labels.detach()) * mask).mean()
         loss = loss_x + self.lambda_u * loss_u
-        # print(f"loss: {loss_x.item()}")
+        
         # === Backward Pass ===
         self.optimizer.zero_grad()
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
         self.optimizer.step()
 
         return loss.item(), loss_x.item(), loss_u.item(), lhc_val, lce_val
@@ -165,7 +163,7 @@ class FixMatch:
     def load_model(self, path):
         self.model.load_state_dict(torch.load(path))
     
-    def active_learning_loop(self, unlabeled_data, train_embeddings, train_labels, budget=10, margin=1.0, K=63):
+    def active_learning_loop(self, unlabeled_data, train_embeddings, train_labels, budget=10, margin=1.0, K=63, p_value=2):
         """
         Selects the top 'budget' most uncertain samples based on pseudo contrastive loss.
 
@@ -195,7 +193,7 @@ class FixMatch:
         pseudo_labels = (preds.view(-1) >= 0.5).long()
 
         # Step 3: Compute scores for all at once
-        scores = eval.faiss_batch_pseudo_loss_selector(u_emb, pseudo_labels, t_emb, train_labels, margin=1.0, k=K)
+        scores = eval.faiss_batch_pseudo_loss_selector(u_emb, pseudo_labels, t_emb, train_labels, margin=1.0, k=K, P=p_value)
 
         # Step 4: Select top-K
         _, top_indices = torch.topk(scores, k=budget, largest=False, sorted=False)
@@ -204,7 +202,7 @@ class FixMatch:
 
 def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binary, X_unlabeled, \
                                test_sets_by_year, num_classes=2, threshold=0.95, lambda_u=1.0, \
-                                  epochs=1, retrain_epochs=1, batch_size=64, al_batch_size=128, weight=None):
+                                  epochs=1, retrain_epochs=1, batch_size=128, al_batch_size=128, weight=None):
     
     # if weight is None:
     #     weight_tensor = torch.ones(X_labeled.shape[0])
@@ -228,7 +226,6 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
 
     fixMatch = FixMatch(model_fn=model, num_classes=2,\
                           lambda_unsup=1.0, threshold=0.95)   
-    initial_lr = 0.001
 
     # SET Optimizer & LR Scheduler
     ## construct SGD and cosine lr scheduler
@@ -269,7 +266,6 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
                 x_l, y_l = x_l.cuda(), y_l.cuda()
                 y_bin_l = y_bin_l.cuda()
                 x_u = x_u.cuda()
-                # u_i = torch.arange(x_u.size(0)).to(x_u.device)
 
                 # Weak and strong augmentations for unlabeled data, now with seed
                 if args.aug == "random_bit_flip":
@@ -288,14 +284,13 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
                     raise ValueError(f"Unknown augmentation function: {args.aug}")
 
                 loss, loss_s, loss_u, lhc_val, lce_val = fixMatch.train_step(x_l, y_l, y_bin_l, x_u_w, x_u_s)
-                # global_step += 1
+
                 total_loss += loss
                 total_loss_sup += loss_s
                 total_loss_unsup += loss_u
                 total_lhc_val += lhc_val
                 total_lce_val += lce_val
 
-            # global_step += 1
             fixMatch.update_scheduler()
 
             avg_loss = total_loss/N
@@ -334,179 +329,202 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
     # === Evaluate on each year's test set ===
     # eval.model_evaluate(fixMatch.get_model(), test_sets_by_year, args.strategy)
     # Active learning loop: month by month
-    metrics_list = []
-    all_month_losses = []
+    
+    for p_value in [1.0, 1.5, 1.8, 1.9, 2.0, 2.1, 2.2]:
+        for budget in [50, 100, 200, 400]:
+            start = time.time()
+            # Your code block
+            args.budget = budget
+            args.k_nearest_neighbors = budget + 50
+            args.p_value = p_value
 
-    sorted_test_keys = test_sets_by_year.keys() #sorted(test_sets_by_year.keys())
-    # logging.info(f"Keys: {sorted_test_keys}")
+            metrics_list = []
+            all_month_losses = []
 
-    for test_idx, year in tqdm(enumerate(sorted_test_keys), total=len(sorted_test_keys), desc="Active Learning Loop"):
-        X_test, y_test_bin, y_test_actual = test_sets_by_year[year]
+            sorted_test_keys = test_sets_by_year.keys() #sorted(test_sets_by_year.keys())
+            # logging.info(f"Keys: {sorted_test_keys}")
 
-        # === Evaluate on this test set BEFORE adding to unlabeled set ===
-        metrics, mismatch_details = eval.evaluate_model_active(fixMatch.get_model(), X_test, y_test_bin, \
-                                                               y_test_actual, num_classes=num_classes)
-        metrics['year'] = year
-        metrics_list.append(metrics)
-        print(f"Year {year}: " + ", ".join([f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items()]))
+            for test_idx, year in tqdm(enumerate(sorted_test_keys), total=len(sorted_test_keys), desc="Active Learning Loop"):
+                X_test, y_test_bin, y_test_actual = test_sets_by_year[year]
 
-        # Save mismatch details for this year
-        # mismatch_df = pd.DataFrame(mismatch_details, columns=['index', 'y_pred', 'y_true', 'actual_label'])
-        # mismatch_df.to_csv(
-        #     f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/freematch/results/false_pred/mismatch_{strategy}_{year}.csv",
-        #     index=False
-        # )
-        # === Add this test set to the UNLABELED set for next round (active learning) ===
-        # X_unlabeled = torch.cat([X_unlabeled, X_test.to(X_unlabeled.device)], dim=0)
-        X_unlabeled = X_test.to(X_unlabeled.device)
-        unlabeled_ds = TensorDataset(X_unlabeled.to(X_unlabeled.device))
-        unlabeled_loader = DataLoader(unlabeled_ds, batch_size=batch_size, shuffle=True)
-        # unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=al_batch_size, drop_last=True)
-        
-        # Create a new optimizer and scheduler for each retraining phase
-        optimizer = torch.optim.SGD(grouped_parameters, lr=args.lr, momentum=0.9, nesterov=args.nesterov)
-        scheduler = utils.get_cosine_schedule_with_warmup(optimizer, args.warmup, args.retrain_epochs)
+                # === Evaluate on this test set BEFORE adding to unlabeled set ===
+                metrics, mismatch_details = eval.evaluate_model_active(fixMatch.get_model(), X_test, y_test_bin, \
+                                                                    y_test_actual, num_classes=num_classes)
+                metrics['year'] = year
+                metrics_list.append(metrics)
+                print(f"Year {year}: " + ", ".join([f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items()]))
 
-        ## set AdamW and cosine lr on FreeMatch
-        fixMatch.set_optimizer(optimizer, scheduler)
-        fixMatch.set_data(labeled_loader=labeled_loader, unlabeled_loader=unlabeled_loader)
-        # freeMatch.warmup()
-        
-        best_loss = float('inf')
-        best_state_dict = None
-        loss_log = []
+                # Save mismatch details for this year
+                # mismatch_df = pd.DataFrame(mismatch_details, columns=['index', 'y_pred', 'y_true', 'actual_label'])
+                # mismatch_df.to_csv(
+                #     f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/freematch/results/false_pred/mismatch_{strategy}_{year}.csv",
+                #     index=False
+                # )
+                # === Add this test set to the UNLABELED set for next round (active learning) ===
+                # X_unlabeled = torch.cat([X_unlabeled, X_test.to(X_unlabeled.device)], dim=0)
+                X_unlabeled = X_test.to(X_unlabeled.device)
+                unlabeled_ds = TensorDataset(X_unlabeled.to(X_unlabeled.device))
+                unlabeled_loader = DataLoader(unlabeled_ds, batch_size=batch_size, shuffle=True)
+                # unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=al_batch_size, drop_last=True)
+                
+                # Create a new optimizer and scheduler for each retraining phase
+                optimizer = torch.optim.SGD(grouped_parameters, lr=args.lr, momentum=0.9, nesterov=args.nesterov)
+                scheduler = utils.get_cosine_schedule_with_warmup(optimizer, args.warmup, args.retrain_epochs)
 
-        # Number of unlabeled data
-        N = len(labeled_loader)
+                ## set AdamW and cosine lr on FreeMatch
+                fixMatch.set_optimizer(optimizer, scheduler)
+                fixMatch.set_data(labeled_loader=labeled_loader, unlabeled_loader=unlabeled_loader)
+                # freeMatch.warmup()
+                
+                best_loss = float('inf')
+                best_state_dict = None
+                loss_log = []
 
-        fixMatch.model_train()
+                # Number of unlabeled data
+                N = len(labeled_loader)
 
-        for epoch in tqdm(range(args.retrain_epochs), desc="Retraining FixMatch..."):
-            labeled_iter = iter(labeled_loader)
+                fixMatch.model_train()
 
-            unlabeled_iter= iter(unlabeled_loader)
+                for epoch in tqdm(range(args.retrain_epochs), desc="Retraining FixMatch..."):
+                    labeled_iter = iter(labeled_loader)
 
-            total_loss, total_loss_sup, total_loss_unsup, total_lhc_val, total_lce_val = 0, 0, 0, 0, 0
-            for _ in tqdm(range(N), desc="FixMatch Applying..."):
-                try:
-                    x_l, y_l, y_bin_l = next(labeled_iter)
-                    (x_u,) = next(unlabeled_iter)
-                except StopIteration:
-                    break
+                    unlabeled_iter= iter(unlabeled_loader)
 
-                x_l, y_l = x_l.cuda(), y_l.cuda()
-                y_bin_l = y_bin_l.cuda()
-                x_u = x_u.cuda()
-                # x_u_w, x_u_s = x_u_w.cuda(), x_u_s.cuda()
-                # u_i = torch.arange(x_u_w.size(0)).to(x_u_w.device)
+                    total_loss, total_loss_sup, total_loss_unsup, total_lhc_val, total_lce_val = 0, 0, 0, 0, 0
+                    for _ in range(N):
+                        try:
+                            x_l, y_l, y_bin_l = next(labeled_iter)
+                            (x_u,) = next(unlabeled_iter)
+                        except StopIteration:
+                            break
 
-                if args.aug == "random_bit_flip":
-                    x_u_w = utils.random_bit_flip(x_u, n_bits=1)
-                    x_u_s = utils.random_bit_flip(x_u, n_bits=args.bit_flip)
-                elif args.aug == "random_bit_flip_bernoulli":
-                    x_u_w = utils.random_bit_flip_bernoulli(x_u, p=0.01)
-                    x_u_s = utils.random_bit_flip_bernoulli(x_u, p=0.05)
-                elif args.aug == "random_bit_flip_and_mask":
-                    x_u_w = utils.random_bit_flip_and_mask(x_u, n_bits=1, n_mask=1)
-                    x_u_s = utils.random_bit_flip_and_mask(x_u, n_bits=args.bit_flip, n_mask=args.bit_flip)
-                else:
-                    raise ValueError(f"Unknown augmentation function: {args.aug}")
+                        x_l, y_l = x_l.cuda(), y_l.cuda()
+                        y_bin_l = y_bin_l.cuda()
+                        x_u = x_u.cuda()
+                        # x_u_w, x_u_s = x_u_w.cuda(), x_u_s.cuda()
+                        # u_i = torch.arange(x_u_w.size(0)).to(x_u_w.device)
 
-                loss, loss_s, loss_u, lhc_val, lce_val = fixMatch.train_step(x_l, y_l, y_bin_l, x_u_w, x_u_s)
+                        if args.aug == "random_bit_flip":
+                            x_u_w = utils.random_bit_flip(x_u, n_bits=1)
+                            x_u_s = utils.random_bit_flip(x_u, n_bits=args.bit_flip)
+                        elif args.aug == "random_bit_flip_bernoulli":
+                            x_u_w = utils.random_bit_flip_bernoulli(x_u, p=0.01)
+                            x_u_s = utils.random_bit_flip_bernoulli(x_u, p=0.05)
+                        elif args.aug == "random_bit_flip_and_mask":
+                            x_u_w = utils.random_bit_flip_and_mask(x_u, n_bits=1, n_mask=1)
+                            x_u_s = utils.random_bit_flip_and_mask(x_u, n_bits=args.bit_flip, n_mask=args.bit_flip)
+                        else:
+                            raise ValueError(f"Unknown augmentation function: {args.aug}")
 
-                total_loss += loss
-                total_loss_sup += loss_s
-                total_loss_unsup += loss_u
-                total_lhc_val += lhc_val
-                total_lce_val += lce_val
+                        loss, loss_s, loss_u, lhc_val, lce_val = fixMatch.train_step(x_l, y_l, y_bin_l, x_u_w, x_u_s)
 
-            fixMatch.update_scheduler()
+                        total_loss += loss
+                        total_loss_sup += loss_s
+                        total_loss_unsup += loss_u
+                        total_lhc_val += lhc_val
+                        total_lce_val += lce_val
 
-            avg_loss = total_loss/N
-            avg_loss_sup = total_loss_sup/N
-            avg_loss_unsup = total_loss_unsup/N
-            avg_lhc_val = total_lhc_val/N
-            avg_lce_val = total_lce_val/N
+                    fixMatch.update_scheduler()
 
-            # Collect losses for this epoch
-            loss_log.append({
-                'epoch': epoch + 1,
-                'loss': avg_loss,
-                'sup_loss': avg_loss_sup,
-                'unsup_loss': avg_loss_unsup,
-                'lhc_val': avg_lhc_val,
-                'lce_val': avg_lce_val
-            })
+                    avg_loss = total_loss/N
+                    avg_loss_sup = total_loss_sup/N
+                    avg_loss_unsup = total_loss_unsup/N
+                    avg_lhc_val = total_lhc_val/N
+                    avg_lce_val = total_lce_val/N
 
-            # EARLY STOPPING LOGIC (retraining)
-            if avg_loss < best_loss:
-                best_loss = avg_loss
-                best_state_dict = {k: v.cpu().clone() for k, v in fixMatch.get_model_state().items()}
+                    # Collect losses for this epoch
+                    loss_log.append({
+                        'epoch': epoch + 1,
+                        'loss': avg_loss,
+                        'sup_loss': avg_loss_sup,
+                        'unsup_loss': avg_loss_unsup,
+                        'lhc_val': avg_lhc_val,
+                        'lce_val': avg_lce_val
+                    })
 
-            logging.info(f"##Epoch {epoch+1}/{args.retrain_epochs}: loss={avg_loss:.4f}, sup_loss={avg_loss_sup:.4f}, "
-                         f"unsup_loss={avg_loss_unsup:.4f}, lhc_val={avg_lhc_val:.4f}, lce_val={avg_lce_val:.4f}, best_loss={best_loss:.4f}")
+                    # EARLY STOPPING LOGIC (retraining)
+                    if avg_loss < best_loss:
+                        best_loss = avg_loss
+                        best_state_dict = {k: v.cpu().clone() for k, v in fixMatch.get_model_state().items()}
 
-            # scheduler.step()
-        
-        # Restore best model after retraining
-        if best_state_dict is not None:
-            fixMatch.update_model(best_state_dict)
-        
-        # Save average loss for this month
-        # Collect average loss for this month
-        avg_month_loss = {
-            'year': year,
-            'avg_loss': np.mean([entry['loss'] for entry in loss_log]),
-            'avg_sup_loss': np.mean([entry['sup_loss'] for entry in loss_log]),
-            'avg_unsup_loss': np.mean([entry['unsup_loss'] for entry in loss_log]),
-            'avg_lhc_val': np.mean([entry['lhc_val'] for entry in loss_log]),
-            'avg_lce_val': np.mean([entry['lce_val'] for entry in loss_log])
-        }
-        all_month_losses.append(avg_month_loss)
-        
-        # === Active Learning: Select top uncertain samples from unlabeled set ===
-        # Get embeddings for the unlabeled data
-        with torch.no_grad():
-            model = fixMatch.get_model()
-            model.eval()
-            _, train_embeddings, _ = model(X_labeled)
-        # Assume your model, encoder, and training embeddings are ready
-        selected_idxs = fixMatch.active_learning_loop(
-            unlabeled_data=X_unlabeled,
-            train_embeddings=train_embeddings,
-            train_labels=y_labeled,
-            budget=args.budget,  # Select top 10 uncertain
-            margin=1.0,
-            K=args.k_nearest_neighbors
-        )
-        print("Selected indices for labeling:", selected_idxs)
-        # print("Uncertainty scores:", scores)
+                    logging.info(f"##Epoch {epoch+1}/{args.retrain_epochs}: loss={avg_loss:.4f}, sup_loss={avg_loss_sup:.4f}, "
+                                f"unsup_loss={avg_loss_unsup:.4f}, lhc_val={avg_lhc_val:.4f}, lce_val={avg_lce_val:.4f}, best_loss={best_loss:.4f}")
 
-        X_labeled = torch.cat([X_labeled, X_test[selected_idxs].to(X_unlabeled.device)], dim=0)
+                    # scheduler.step()
+                
+                # Restore best model after retraining
+                if best_state_dict is not None:
+                    fixMatch.update_model(best_state_dict)
+                
+                # Save average loss for this month
+                # Collect average loss for this month
+                avg_month_loss = {
+                    'year': year,
+                    'avg_loss': np.mean([entry['loss'] for entry in loss_log]),
+                    'avg_sup_loss': np.mean([entry['sup_loss'] for entry in loss_log]),
+                    'avg_unsup_loss': np.mean([entry['unsup_loss'] for entry in loss_log]),
+                    'avg_lhc_val': np.mean([entry['lhc_val'] for entry in loss_log]),
+                    'avg_lce_val': np.mean([entry['lce_val'] for entry in loss_log])
+                }
+                all_month_losses.append(avg_month_loss)
+                
+                # === Active Learning: Select top uncertain samples from unlabeled set ===
+                # Get embeddings for the unlabeled data
+                with torch.no_grad():
+                    model = fixMatch.get_model()
+                    model.eval()
+                    _, train_embeddings, _ = model(X_labeled)
+                # Assume your model, encoder, and training embeddings are ready
+                selected_idxs = fixMatch.active_learning_loop(
+                    unlabeled_data=X_unlabeled,
+                    train_embeddings=train_embeddings,
+                    train_labels=y_labeled,
+                    budget=args.budget,  # Select top 10 uncertain
+                    margin=1.0,
+                    K=args.k_nearest_neighbors,
+                    p_value=args.p_value
+                )
+                print("Selected indices for labeling:", selected_idxs)
+                # print("Uncertainty scores:", scores)
 
-        y_labeled = torch.cat([y_labeled, torch.tensor(y_test_actual[selected_idxs], device=X_unlabeled.device, dtype=y_labeled.dtype)], dim=0)
-        y_labeled_binary = torch.cat([y_labeled_binary, torch.tensor(y_test_bin[selected_idxs], device=X_unlabeled.device, dtype=y_labeled_binary.dtype)], dim=0)
+                X_labeled = torch.cat([X_labeled, X_test[selected_idxs].to(X_unlabeled.device)], dim=0)
 
-        # weight_tensor = torch.ones(X_labeled.shape[0])
-        labeled_ds = TensorDataset(X_labeled, y_labeled, y_labeled_binary)
-        labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
+                y_labeled = torch.cat([y_labeled, torch.tensor(y_test_actual[selected_idxs], device=X_unlabeled.device, dtype=y_labeled.dtype)], dim=0)
+                y_labeled_binary = torch.cat([y_labeled_binary, torch.tensor(y_test_bin[selected_idxs], device=X_unlabeled.device, dtype=y_labeled_binary.dtype)], dim=0)
 
-    # Save model after all iterations of Active learning
-    fixMatch.save_model(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.strategy}_model_al.pth")
+                # weight_tensor = torch.ones(X_labeled.shape[0])
+                labeled_ds = TensorDataset(X_labeled, y_labeled, y_labeled_binary)
+                labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
 
-    # Save results to CSV
-    metrics_df = pd.DataFrame(metrics_list)
-    metrics_df.to_csv(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_al.csv", index=False)
+            # Save model after all iterations of Active learning
+            # fixMatch.save_model(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.strategy}_model_al.pth")
 
-    # Save average losses to CSV
-    avg_loss_df = pd.DataFrame(all_month_losses)
-    avg_loss_df.to_csv(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_ssl_loss_al.csv", index=False)
+            # Save results to CSV
+            metrics_df = pd.DataFrame(metrics_list)
+            # metrics_df.to_csv(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_al.csv", index=False)
 
-    print(f"Mean F1 Scores: {metrics_df['f1'].mean():.4f}")
-    print(f"Mean False Negative Rates: {metrics_df['fnr'].mean():.4f}")
-    print(f"Mean False Positive Rates: {metrics_df['fpr'].mean():.4f}")
-    plot_gen.plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], \
-                         save_path=f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/f1_fnr_{args.strategy}_al.png")
+            # Save average losses to CSV
+            # avg_loss_df = pd.DataFrame(all_month_losses)
+            # avg_loss_df.to_csv(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_ssl_loss_al.csv", index=False)
+            avg_f1 = metrics_df['f1'].mean()
+            avg_fnr = metrics_df['fnr'].mean()
+            avg_fpr = metrics_df['fpr'].mean()
+            print(f"Mean F1 Scores: {avg_f1:.4f}")
+            print(f"Mean False Negative Rates: {avg_fnr:.4f}")
+            print(f"Mean False Positive Rates: {avg_fpr:.4f}")
+
+            end = time.time()
+
+            print(f"Program Execution Ended for one combination!!")
+            print(f"##Execution time: {end - start:.4f} seconds")
+
+            # Append to CSV file
+            with open(f'/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/model_performance_{args.aug}_p_values_budgets.csv', mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([args.p_value, args.budget, avg_f1, avg_fnr, avg_fpr, (end - start)])  # appends a single row
+
+            # plot_gen.plot_f1_fnr(metrics_df['year'], metrics_df['f1'], metrics_df['fnr'], \
+            #                      save_path=f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/f1_fnr_{args.strategy}_al.png")
 
 # === Main Execution ===
 if __name__ == "__main__":
@@ -526,13 +544,12 @@ if __name__ == "__main__":
     parser.add_argument('--strategy', default="", type=str, help='strategy...')
     parser.add_argument('--pretrained_model', default=True, type=bool, help='Whether to use pretrained model or not')
     parser.add_argument("--epochs", type=int, default=250, help="Number of epochs for SSL training")
-    parser.add_argument("--retrain_epochs", type=int, default=150, help="Number of epochs for SSL retraining")
+    parser.add_argument("--retrain_epochs", type=int, default=100, help="Number of epochs for SSL retraining")
     parser.add_argument("--budget", type=int, default=150, help="Number of budget for SSL retraining")
     parser.add_argument("--k_nearest_neighbors", type=int, default=200, help="Number of nearest neighbors for SSL retraining")
     parser.add_argument("--pretrained_model_path", type=str, default="", help="Path to the pretrained model if any")
 
     args = parser.parse_args()
-
     args.seed = 0
     SEED = args.seed  # You can set this to any integer you like
 
@@ -551,12 +568,12 @@ if __name__ == "__main__":
     args.aug = "random_bit_flip"
     args.budget = 400
     args.k_nearest_neighbors = 450
-    args.p_value = 2.0
+    args.p_value = 1.9
 
     args.pretrained_model = True
     args.pretrained_model_path = f"fixmatch_hidistloss_w_al_{args.aug}_{str(n_bit_flip)}_lbr_{str(labeled_ratio)}_ep{str(args.epochs)}_model.pth"
 
-    args.strategy = f"fixmatch_hidistloss_w_al_" + args.aug + "_" + str(n_bit_flip) + "_lbr_" + str(labeled_ratio) +  "_seed_" + str(args.seed) + "_ep" + str(args.epochs) + "_retrain_ep" + str(args.retrain_epochs) + "_budget" + str(args.budget) + "_k" + str(args.k_nearest_neighbors)
+    args.strategy = f"fixmatch_hidistloss_w_al_" + args.aug + "_" + str(n_bit_flip) + "_lbr_" + str(labeled_ratio) +  "_seed_" + str(args.seed) + "_ep" + str(args.epochs) + "_retrain_ep" + str(args.retrain_epochs) + "_budget" + str(args.budget) + "_k" + str(args.k_nearest_neighbors) + "_p" + str(args.p_value)
     print(f"Running {strategy}...")
     print(f"Using {n_bit_flip} bits to flip per sample.")
 
@@ -571,14 +588,12 @@ if __name__ == "__main__":
                 data = np.load(f"{path}{year}-{month:02d}_selected.npz")
                 X_raw = data["X_train"]
                 y_true = (data["y_train"] > 0).astype(int)
-                # X_scaled = scaler.transform(X_raw)
                 X_tensor = torch.tensor(X_raw, dtype=torch.float32).cuda()
                 y_tensor = torch.tensor(y_true, dtype=torch.long).cuda()
                 test_sets_by_year[f"{year}_{month}"] = (X_tensor, y_tensor, data["y_train"])
             except FileNotFoundError:
                 continue
 
-    # input_dim = X_2012_labeled.shape[1]
     NUM_FEATURES = X_2012_labeled.shape[1]
     mlp_hidden = '100-100'
     enc_hidden = '512-384-256-128'
@@ -587,7 +602,6 @@ if __name__ == "__main__":
     enc_dims = utils.get_model_dims('Encoder', NUM_FEATURES, enc_hidden, NUM_CLASSES)
     mlp_dims = utils.get_model_dims('MLP', enc_dims[-1], mlp_hidden, NUM_CLASSES)
     model = SimpleEncClassifier(enc_dims, mlp_dims).cuda()
-    # model = Classifier(input_dim=NUM_FEATURES, num_classes=n_classes).cuda()
 
     train_fixmatch_drift_eval(
         args,
@@ -599,8 +613,5 @@ if __name__ == "__main__":
         test_sets_by_year,
         num_classes=NUM_CLASSES
     )
-    # print(f"Mean F1 Scores: {sum(f1_scores.values())/len(f1_scores)}")
-    # print(f"Mean False Negative Rates: {sum(fnrs.values())/len(fnrs)}")
-    # plot_f1_fnr(f1_scores, fnrs)
 
 # CUDA_VISIBLE_DEVICES=1 nohup python active_learning.py > /home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/output.log 2>&1 &
