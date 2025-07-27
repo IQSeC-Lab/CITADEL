@@ -42,17 +42,17 @@ strategy = ""
 
 # === Classifier Definition ===
 class Classifier(nn.Module):
-    def __init__(self, input_dim, num_classes, dropout=0.2):
+    def __init__(self, input_dim, num_classes):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 512), nn.ReLU(),
             nn.Linear(512, 384), nn.ReLU(),
             nn.Linear(384, 256), nn.ReLU(),
-            nn.Linear(256, 128), nn.ReLU(), # nn.Dropout(dropout),
+            nn.Linear(256, 128), nn.ReLU()
         )
         self.classifier = nn.Sequential(
-            nn.Linear(128, 100), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(100, 100), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, 100), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(100, 100), nn.ReLU(), nn.Dropout(0.2),
             nn.Linear(100, num_classes)
             #nn.Linear(100, 1), nn.Sigmoid()
         )
@@ -142,18 +142,39 @@ def get_cosine_schedule_with_warmup(optimizer,
 
 
 
-def split_labeled_unlabeled(X, y, labeled_ratio=0.1, stratify=True, random_state=42):
+def split_labeled_unlabeled(X, y_bin, y_fam, labeled_ratio=0.1, stratify=True, random_state=42):
+    """
+    Splits the dataset into labeled and unlabeled sets, maintaining binary and family labels.
+
+    Args:
+        X (array-like): Feature matrix.
+        y_bin (array-like): Binary labels (e.g., benign vs malware).
+        y_fam (array-like): Multi-class labels (e.g., malware family).
+        labeled_ratio (float): Proportion of labeled data.
+        stratify (bool): Whether to stratify by y_bin.
+        random_state (int): Seed.
+
+    Returns:
+        X_labeled, y_labeled_bin, y_labeled_fam,
+        X_unlabeled, y_unlabeled_bin, y_unlabeled_fam
+    """
     n_samples = len(X)
     n_labeled = int(n_samples * labeled_ratio)
+
     if stratify:
-        X_labeled, X_unlabeled, y_labeled, y_unlabeled = train_test_split(
-            X, y, train_size=n_labeled, stratify=y, random_state=random_state
-        )
+        stratify_labels = y_bin
     else:
-        X_labeled, X_unlabeled, y_labeled, y_unlabeled = train_test_split(
-            X, y, train_size=n_labeled, random_state=random_state
-        )
-    return X_labeled, y_labeled, X_unlabeled, y_unlabeled
+        stratify_labels = None
+
+    X_labeled, X_unlabeled, y_bin_labeled, y_bin_unlabeled, y_fam_labeled, y_fam_unlabeled = train_test_split(
+        X, y_bin, y_fam,
+        train_size=n_labeled,
+        stratify=stratify_labels,
+        random_state=random_state
+    )
+
+    return X_labeled, y_bin_labeled, y_fam_labeled, X_unlabeled, y_bin_unlabeled, y_fam_unlabeled
+
 
 def random_bit_flip(x, n_bits=1):
     x_aug = x.clone()
@@ -635,8 +656,7 @@ def prioritized_uncertainty_selection(
     final_score = w_margin * margin_score + w_lp * lp_score + w_conf * conf_score
 
     # ---------- Select top `budget` ----------
-    k = min(budget, len(final_score))  # Ensure k is within valid range
-    selected_indices = torch.topk(final_score, k).indices
+    selected_indices = torch.topk(final_score, budget).indices
 
     print(f"[✓] Prioritized Uncertainty Selection (budget={budget})")
     print(f" - margin_score: {w_margin}, lp_score: {w_lp}, conf_score: {w_conf}")
@@ -766,7 +786,7 @@ def hybrid_active_sample_selection(
 
 
 # ---------- Active Learning Integration ----------
-def active_learning_step(args, year_month, model, X_labeled, y_labeled, X_test, y_test, top_k=200):
+def active_learning_step(args, year_month, model, X_labeled, y_labeled, y_labeled_fam, X_test, y_test, y_test_fam, top_k=200):
     """
     Active learning step:
     1. Selects top-k most uncertain samples from the entire test set (X_test).
@@ -827,20 +847,19 @@ def active_learning_step(args, year_month, model, X_labeled, y_labeled, X_test, 
     # Step 3: Update labeled and unlabeled sets
     X_new_labeled = X_test[uncertain_indices]
     y_new_labeled = y_test[uncertain_indices]
+    y_fam_selected = y_test_fam[uncertain_indices]
     X_unlabeled = X_test[remaining_mask]
     y_unlabeled = y_test[remaining_mask]  # Optional, for evaluation
+    
 
-    # X_labeled = torch.cat([X_labeled, X_new_labeled], dim=0)
-    # y_labeled = torch.cat([y_labeled, y_new_labeled], dim=0)
-
-    # increasing the boundary samples by concatenatig again
-    X_labeled = torch.cat([X_labeled, X_new_labeled, X_new_labeled], dim=0)
-    y_labeled = torch.cat([y_labeled, y_new_labeled, y_new_labeled], dim=0)
+    X_labeled = torch.cat([X_labeled, X_new_labeled], dim=0)
+    y_labeled = torch.cat([y_labeled, y_new_labeled], dim=0)
+    y_labeled_fam = torch.cat([y_labeled_fam, y_fam_selected], dim=0)
 
     print(f"[✓] Added {len(X_new_labeled)} new labeled samples.")
     print(f"[✓] Remaining unlabeled pool size: {len(X_unlabeled)}")
 
-    return X_labeled, y_labeled, X_unlabeled, y_unlabeled
+    return X_labeled, y_labeled, y_labeled_fam, X_unlabeled, y_unlabeled
 
 
 # ---------- Active learning step considering low-confidence samples separated----------
@@ -1048,24 +1067,26 @@ class SupConLoss(nn.Module):
 
 
 def active_learning_fixmatch(
-    bit_flip, model, optimizer, X_labeled, y_labeled, y_fam, X_unlabeled,y_unlabeled,
-    args, lambda_u=1.0, epochs=250, retrain_epochs=100, num_classes=2, threshold=0.95, batch_size=512,
+    bit_flip, model, optimizer, X_labeled, y_labeled, y_labeled_fam, X_unlabeled,y_unlabeled,
+    args, num_classes=2, threshold=0.95, lambda_u=1.0, epochs=250, retrain_epochs=100, batch_size=512,
     al_batch_size=512, margin=1.0
 ):
-    labeled_ds = TensorDataset(X_labeled, y_labeled)
-    unlabeled_ds = TensorDataset(X_unlabeled)
+    labeled_ds = TensorDataset(X_labeled, y_labeled, y_labeled_fam)
+    unlabeled_ds = TensorDataset(X_unlabeled, y_unlabeled)
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler
     
 
-    labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=batch_size, drop_last=True)
+    # labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=batch_size, drop_last=True)
     # labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
-    # half_sampler = HalfSampler(y_labeled, batch_size=batch_size)
-    # labeled_loader = DataLoader(dataset=labeled_ds, batch_size=batch_size, sampler=half_sampler)
+    half_sampler = HalfSampler(y_labeled, batch_size=batch_size)
+    labeled_loader = DataLoader(dataset=labeled_ds, batch_size=batch_size, sampler=half_sampler)
     unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=batch_size, drop_last=True)
 
     criterion = nn.CrossEntropyLoss(reduction='mean')
 
-    supcon_loss_fn = SupConLoss(temperature=0.07)
+    # supcon_loss_fn = SupConLoss(temperature=0.07)
+    hidist_loss_fn = HiDistanceXentLoss(reduce='mean', sample_reduce='mean')
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     # lambda_supcon = 0.5  # You can tune this
 
 
@@ -1074,10 +1095,9 @@ def active_learning_fixmatch(
     best_loss = float('inf')
     best_state_dict = None
 
-    # mu = 1  # FixMatch default
-    # interleave_size = 2 * mu + 1
-    # lambda_triplet = 1
-    
+    mu = 1  # FixMatch default
+    interleave_size = 2 * mu + 1
+    lambda_triplet = 1
     for epoch in range(epochs):
         model.train()
         total_loss = 0
@@ -1086,8 +1106,8 @@ def active_learning_fixmatch(
 
         for _ in range(len(labeled_loader)):
             try:
-                x_l, y_l = next(labeled_iter)
-                (x_u,) = next(unlabeled_iter)
+                x_l, y_l, y_fam = next(labeled_iter)
+                (x_u, _ ) = next(unlabeled_iter)
             except StopIteration:
                 break
 
@@ -1127,12 +1147,35 @@ def active_learning_fixmatch(
             loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
 
             # Contrastive loss on labeled encodings
-            features = F.normalize(model.encode(x_l), dim=1)
-            loss_supcon = supcon_loss_fn(features, y_l)
+            # features = F.normalize(model.encode(x_l), dim=1)
+            # loss_supcon = supcon_loss_fn(features, y_l)
 
+
+            # Hierarchical contrastive loss
+            xent_lambda = 100.0
+
+            with torch.no_grad():
+                y_l_bin = F.one_hot(y_l, num_classes=2).float()
+            features = F.normalize(model.encode(x_l), dim=1)
+            y_bin_pred = F.softmax(logits_x, dim=1)
+            weight_tensor = torch.ones(features.shape[0])
+            loss_hidist, loss_dist = hidist_loss_fn(
+                xent_lambda=xent_lambda,
+                y_bin_pred=y_bin_pred,
+                y_bin_batch=y_l_bin,
+                features=features,
+                labels=y_fam,
+                margin=10.0,
+                weight = weight_tensor
+            )
+
+            # --- Final loss ---
+            loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_hidist
+            if loss.dim() > 0:
+                loss = loss.mean()
 
             # Final total loss
-            loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_supcon
+            # loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_supcon
             # loss = lambda_u * loss_u + args.lambda_supcon * loss_supcon
 
             # ====== Total Loss ======
@@ -1142,7 +1185,6 @@ def active_learning_fixmatch(
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-
 
         if total_loss < best_loss:
             best_loss = total_loss
@@ -1168,6 +1210,7 @@ def active_learning_fixmatch(
                     y_true = (data["y_train"] > 0).astype(int)
                     X_test = torch.tensor(X_raw, dtype=torch.float32).cuda()
                     y_test = torch.tensor(y_true, dtype=torch.long).cuda()
+                    y_test_fam = torch.tensor(data["y_train"], dtype=torch.long).cuda()
 
                     logits = model(X_test)
                     probs = torch.softmax(logits, dim=1) if logits.shape[1] > 1 else torch.sigmoid(logits)
@@ -1205,36 +1248,43 @@ def active_learning_fixmatch(
             print(f"Total misclassified samples in {year}-{month:02d}: {num_misclassified} out of {len(y_test)} samples")
             
             # Select samples based on uncertainty sampling
-            X_labeled, y_labeled, X_test, y_test = active_learning_step(
+            print(f"x_test = {X_test.shape}")
+            print(f"y_test_fam = {y_test_fam.shape}")
+            X_labeled, y_labeled, y_labeled_fam, X_test, y_test = active_learning_step(
                 args=args,
                 year_month=year_month,
                 model=model,
                 X_labeled=X_labeled,
                 y_labeled=y_labeled,
+                y_labeled_fam=y_labeled_fam,
                 X_test=X_test,
                 y_test=y_test,
+                y_test_fam=y_test_fam,
                 top_k=args.budget,  # Use budget as top_k
                 # confidence_threshold=threshold
             )
 
             
-            X_unlabeled = X_unlabeled.cpu()
-            X_test = X_test.cpu()
+            print(X_labeled.shape)
+            print(y_labeled.shape)
+            print(y_test_fam.shape)
             X_unlabeled = torch.cat([X_unlabeled, X_test], dim=0)
-
-            # X_unlabeled = torch.cat([X_unlabeled, X_test], dim=0)
             # X_unlabeled = X_test.clone()
             # Remove selected samples from the unlabeled set
             unlabeled_ds = TensorDataset(X_unlabeled)
-            labeled_ds = TensorDataset(X_labeled, y_labeled)
+            labeled_ds = TensorDataset(X_labeled, y_labeled, y_labeled_fam)
 
 
             labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=al_batch_size, drop_last=True)
+            half_sampler = HalfSampler(y_labeled, batch_size=batch_size)
+            # labeled_loader = DataLoader(dataset=labeled_ds, batch_size=batch_size, sampler=half_sampler)
             unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=al_batch_size, drop_last=True)
             criterion = nn.CrossEntropyLoss(reduction='mean')
 
-            supcon_loss_fn = SupConLoss(temperature=0.07)
+            # supcon_loss_fn = SupConLoss(temperature=0.07)
             # lambda_supcon = 0.5  # You can tune this
+
+            hidist_loss_fn = HiDistanceXentLoss(reduce='none', sample_reduce='mean')
 
 
 
@@ -1248,10 +1298,6 @@ def active_learning_fixmatch(
             ]
             optimizer = torch.optim.SGD(grouped_parameters, lr=args.lr,
                                 momentum=0.9, nesterov=args.nesterov)
-            
-            # if args.use_ema:
-            #     from models.ema import ModelEMA
-            #     ema_model = ModelEMA(args, model, args.ema_decay)
             
             # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
             scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, epochs)
@@ -1267,7 +1313,7 @@ def active_learning_fixmatch(
                 unlabeled_iter = iter(unlabeled_loader)
                 for _ in range(len(labeled_loader)):
                     try:
-                        x_l, y_l = next(labeled_iter)
+                        x_l, y_l, y_fam = next(labeled_iter)
                         (x_u,) = next(unlabeled_iter)
                     except StopIteration:
                         break
@@ -1293,7 +1339,7 @@ def active_learning_fixmatch(
 
                     with torch.no_grad():
                         # Pseudo-labels via FixMatch (confidence-based)
-                        pseudo_logits = F.softmax(logits_u_w / args.T, dim=1)
+                        pseudo_logits = F.softmax(logits_u_w, dim=1)
                         pseudo_labels = torch.argmax(pseudo_logits, dim=1)
                         max_probs, _ = torch.max(pseudo_logits, dim=1)
                         mask = max_probs.ge(threshold).float()
@@ -1303,14 +1349,33 @@ def active_learning_fixmatch(
                     loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
 
                     # Contrastive loss on labeled encodings
-                    features = F.normalize(model.encode(x_l), dim=1)
-                    loss_supcon = supcon_loss_fn(features, y_l)
+                    # features = F.normalize(model.encode(x_l), dim=1)
+                    # loss_supcon = supcon_loss_fn(features, y_l)
 
 
                     # Final total loss
-                    loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_supcon
+                    # loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_supcon
+                    # Hierarchical contrastive loss
+                    xent_lambda = 100.0
 
+                    with torch.no_grad():
+                        y_l_bin = F.one_hot(y_l, num_classes=2).float()
+                    features = F.normalize(model.encode(x_l), dim=1)
+                    y_bin_pred = F.softmax(logits_x, dim=1)
 
+                    loss_hidist, loss_dist = hidist_loss_fn(
+                        xent_lambda=xent_lambda,
+                        y_bin_pred=y_bin_pred,
+                        y_bin_batch=y_l_bin,
+                        features=features,
+                        labels=y_fam,
+                        margin=10.0
+                    )
+
+                    # --- Final loss ---
+                    loss = loss_x + lambda_u * loss_u + args.lambda_supcon * loss_hidist
+                    if loss.dim() > 0:
+                        loss = loss.mean()
                     # Final total loss
                     # loss = loss_x + lambda_u * loss_u
 
@@ -1319,13 +1384,6 @@ def active_learning_fixmatch(
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
-
-                    # # NOTE: added ema
-                    # scheduler.step()
-                    # if args.use_ema:
-                    #     ema_model.update(model)
-                    # model.zero_grad()
-                
                 scheduler.step()
                 print(f"Epoch {epoch+1}: loss={total_loss:.4f}")
 
@@ -1397,7 +1455,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run FixMatch with Bit Flip Augmentation")
     parser.add_argument("--bit_flip", type=int, default=11, help="Number of bits to flip per sample")
     parser.add_argument("--labeled_ratio", type=float, default=0.4, help="Ratio of labeled data")
-    parser.add_argument("--aug", type=str, default="random_bit_flip_bernoulli", help="Augmentation function to use")
+    parser.add_argument("--aug", type=str, default="random_bit_flip", help="Augmentation function to use")
     parser.add_argument("--seed", type=int, default=1, help="Random seed for reproducibility")
     parser.add_argument('--lambda-u', default=1, type=float, help='coefficient of unlabeled loss')
     parser.add_argument('--T', default=1, type=float, help='pseudo label temperature')
@@ -1408,8 +1466,8 @@ if __name__ == "__main__":
     parser.add_argument('--warmup', default=0, type=float, help='warmup epochs (unlabeled data based)')
     parser.add_argument('--lp', default=2.0, type=float, help='Lp norm for uncertainty sampling (e.g., 1.0, 2.0, 2.5)')
     parser.add_argument('--budget', default=200, type=int, help='Budget for active learning (number of samples to select)')
-    parser.add_argument('--epochs', default=250, type=int, help='Number of training epochs')
-    parser.add_argument('--retrain_epochs', default=100, type=int, help='Number of retraining epochs after initial training')
+    parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
+    parser.add_argument('--retrain_epochs', default=70, type=int, help='Number of retraining epochs after initial training')
     parser.add_argument('--save_path', type=str, default='results/al_uc/', help='Path to save results')
     parser.add_argument('--unc_samp', type=str, default='lp-norm', choices=['lp-norm', 'boundary', 'hybrid'], help='Uncertainty sampling method to use')
     parser.add_argument('--lambda_supcon', default=0.5, type=float, help='Coefficient of supervised contrastive loss.')
@@ -1433,13 +1491,14 @@ if __name__ == "__main__":
     file_path = f"{path}2012-01to2012-12_selected.npz"
     data = np.load(file_path, allow_pickle=True)
     X, y = data['X_train'], data['y_train']
+    # NOTE: Need to uncomment the following if we do not use HiContrastive learning
     y_bin = np.array([0 if label == 0 else 1 for label in y])
     
     n_bit_flip = args.bit_flip
     labeled_ratio = args.labeled_ratio
 
     strategy = f"fixmatch_w_al_uc_" + args.aug + "_" + str(n_bit_flip) + "_lbr_" + str(labeled_ratio) +  "_seed_" + str(args.seed)
-    append_to_strategy(f"_{args.strategy}")
+    append_to_strategy(f"_{strategy}")
     append_to_strategy(f"_{args.budget}")
     append_to_strategy(f"_lp_{args.lp}")
     append_to_strategy(f"_unc_samp_{args.unc_samp}")
@@ -1451,11 +1510,12 @@ if __name__ == "__main__":
 
     # scaler = StandardScaler()
     # X_scaled = scaler.fit_transform(X)
-    X_labeled, y_labeled, X_unlabeled, y_unlabeled = split_labeled_unlabeled(X, y_bin, labeled_ratio=args.labeled_ratio)
+    X_labeled, y_labeled, y_labeled_fam, X_unlabeled, y_unlabeled, y_unlabeled_fam = \
+    split_labeled_unlabeled(X, y_bin, y, labeled_ratio=args.labeled_ratio)
 
     X_2012_labeled = torch.tensor(X_labeled, dtype=torch.float32).cuda()
     y_2012_labeled = torch.tensor(y_labeled, dtype=torch.long).cuda()
-    y_fam = torch.tensor(y, dtype=torch.long).cuda()
+    y_labeled_fam = torch.tensor(y_labeled_fam, dtype=torch.long).cuda()
     X_2012_unlabeled = torch.tensor(X_unlabeled, dtype=torch.float32).cuda()
     y_2012_unlabeled = torch.tensor(y_unlabeled, dtype=torch.long).cuda()
 
@@ -1481,10 +1541,6 @@ if __name__ == "__main__":
     ]
     optimizer = torch.optim.SGD(grouped_parameters, lr=args.lr,
                           momentum=0.9, nesterov=args.nesterov)
-    args.device = next(model.parameters()).device
-    # if args.use_ema:
-    #     from models.ema import ModelEMA
-    #     ema_model = ModelEMA(args, model, args.ema_decay)
     
     # calculate the time it takes to run the function
     import time
@@ -1495,14 +1551,11 @@ if __name__ == "__main__":
         optimizer,
         X_2012_labeled,
         y_2012_labeled,
-        y_fam,
+        y_labeled_fam,
         X_2012_unlabeled,
         y_2012_unlabeled,
         args,
-        lambda_u=args.lambda_u,
-        epochs=args.epochs,
-        retrain_epochs=args.retrain_epochs,
-        num_classes=num_classes,
+        num_classes=num_classes
     )
     end_time = time.time()
     print(f"Time taken to run the function: {end_time - start_time:.2f} seconds")
