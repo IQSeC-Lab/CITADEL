@@ -2,6 +2,7 @@
 *.csv
 *.png
 data/
+All_results/
 # Ignore all files in the data directory
 __pycache__/
 # Ignore Python cache files
