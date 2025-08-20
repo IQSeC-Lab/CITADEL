@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Dataset
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from torch.optim.lr_scheduler import LambdaLR
@@ -65,9 +65,9 @@ class ClassifierWB(nn.Module):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 512), nn.BatchNorm1d(512), nn.ReLU(),
-            nn.Linear(512, 384), nn.BatchNorm1d(384), nn.ReLU(),
-            nn.Linear(384, 256), nn.BatchNorm1d(256), nn.ReLU(),
-            nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU()
+            nn.Linear(512, 384), nn.BatchNorm1d(384), nn.ReLU(),nn.Dropout(0.2),
+            nn.Linear(384, 256), nn.BatchNorm1d(256), nn.ReLU(),nn.Dropout(0.2),
+            nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU(),nn.Dropout(0.2),
         )
 
         self.classifier = nn.Sequential(
@@ -82,6 +82,45 @@ class ClassifierWB(nn.Module):
     def encode(self, x):
         """Encode input features to a lower-dimensional representation."""
         return self.encoder(x)
+
+
+
+class TripletLoss(nn.Module):
+    def __init__(self, margin=1.0):
+        super(TripletLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, anchor, positive, negative):
+        pos_dist = torch.norm(anchor - positive, dim=1)
+        neg_dist = torch.norm(anchor - negative, dim=1)
+        loss = torch.clamp(pos_dist - neg_dist + self.margin, min=0.0)
+        return loss.mean()
+
+class MalwareTripletDataset(Dataset):
+    def __init__(self, X, y, num_triplets=5000):
+        self.X = X
+        self.y = y
+        self.num_triplets = num_triplets
+        self.triplets = []
+        self._create_triplets()
+
+    def _create_triplets(self):
+        for _ in range(self.num_triplets):
+            idx_anchor = random.randint(0, len(self.y) - 1)
+            pos_indices = np.where(self.y == self.y[idx_anchor])[0]
+            neg_indices = np.where(self.y != self.y[idx_anchor])[0]
+            if len(pos_indices) > 1 and len(neg_indices) > 0:
+                idx_pos = random.choice(pos_indices)
+                idx_neg = random.choice(neg_indices)
+                self.triplets.append((self.X[idx_anchor], self.X[idx_pos], self.X[idx_neg]))
+
+    def __len__(self):
+        return len(self.triplets)
+
+    def __getitem__(self, idx):
+        anchor, positive, negative = self.triplets[idx]
+        return torch.tensor(anchor), torch.tensor(positive), torch.tensor(negative)
+
 
 
 def get_cosine_schedule_with_warmup(optimizer,
@@ -116,9 +155,13 @@ def split_labeled_unlabeled(X, y, labeled_ratio=0.1, stratify=True, random_state
 def random_bit_flip(x, n_bits=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        flip_indices = torch.randperm(num_features)[:n_bits]
-        x_aug[i, flip_indices] = 1 - x_aug[i, flip_indices]
+
+    # Generate random bit indices to flip for each sample
+    flip_indices = torch.randint(0, num_features, (batch_size, n_bits), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_bits)
+
+    # Flip bits
+    x_aug[row_indices, flip_indices] = 1 - x_aug[row_indices, flip_indices]
     return x_aug
 
 def random_bit_flip_bernoulli(x, p=None, n_bits=None):
@@ -144,12 +187,16 @@ def random_bit_flip_bernoulli(x, p=None, n_bits=None):
     x_aug = torch.abs(x_aug - flip_mask)
     return x_aug
 
+
 def random_feature_mask(x, n_mask=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        mask_indices = torch.randperm(num_features)[:n_mask]
-        x_aug[i, mask_indices] = 0
+
+    # Random mask indices (may contain duplicates)
+    mask_indices = torch.randint(0, num_features, (batch_size, n_mask), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_mask)
+
+    x_aug[row_indices, mask_indices] = 0
     return x_aug
 
 def random_bit_flip_and_mask(x, n_bits=1, n_mask=1):
@@ -751,9 +798,9 @@ def active_learning_step(args, year_month, model, X_labeled, y_labeled, X_test, 
         )
     elif args.unc_samp == 'boundary':
         # Use boundary selection method
-        # uncertain_indices, _ = select_boundary_samples(
-        #     model, X_test, y_test, top_k=top_k, batch_size=256
-        # )
+        uncertain_indices, _ = select_boundary_samples(
+            model, X_test, y_test, top_k=top_k, batch_size=256
+        )
 
         # uncertain_indices, _ = select_diverse_boundary_samples(
         #     model, X_test, budget=top_k
@@ -763,17 +810,17 @@ def active_learning_step(args, year_month, model, X_labeled, y_labeled, X_test, 
         #     model, X_test, y_test, year_month=year_month, top_k=top_k
         # )
 
-        uncertain_indices = prioritized_uncertainty_selection(
-            model,
-            X_labeled, y_labeled,
-            X_test, y_test,
-            budget=top_k,
-            lp_norm=2,
-            confidence_threshold=0.95,
-            w_margin=1.0,
-            w_lp=1.0,
-            w_conf=1.0
-        )
+        # uncertain_indices = prioritized_uncertainty_selection(
+        #     model,
+        #     X_labeled, y_labeled,
+        #     X_test, y_test,
+        #     budget=top_k,
+        #     lp_norm=2,
+        #     confidence_threshold=0.95,
+        #     w_margin=1.0,
+        #     w_lp=1.0,
+        #     w_conf=1.0
+        # )
     elif args.unc_samp == 'hybrid':
         uncertain_indices = hybrid_active_sample_selection(
             model, X_labeled, y_labeled, X_test,
@@ -928,7 +975,7 @@ def append_to_strategy(s):
 # === Main Training Function for FixMatch with AL and taking best loss model weight===
 def active_learning_fixmatch(
     bit_flip, model, optimizer, X_labeled, y_labeled, X_unlabeled,
-    args, num_classes=2, threshold=0.95, lambda_u=1.0, epochs=200, retrain_epochs=70, batch_size=512,
+    args, num_classes=2, threshold=0.95, lambda_u=1.0, epochs=250, retrain_epochs=100, batch_size=512,
     al_batch_size=512 
 ):
     labeled_ds = TensorDataset(X_labeled, y_labeled)
@@ -973,7 +1020,7 @@ def active_learning_fixmatch(
                 x_u_s = random_bit_flip(x_u, n_bits=bit_flip)
             elif args.aug == "random_bit_flip_bernoulli":
                 x_u_w = random_bit_flip_bernoulli(x_u, p=0.01, n_bits=None)
-                x_u_s = random_bit_flip_bernoulli(x_u, p=0.05, n_bits=None)
+                x_u_s = random_bit_flip_bernoulli(x_u, p=0.1, n_bits=None)
             elif args.aug == "random_feature_mask":
                 x_u_w = random_feature_mask(x_u, n_mask=1)
                 x_u_s = random_feature_mask(x_u, n_mask=bit_flip)
@@ -997,10 +1044,27 @@ def active_learning_fixmatch(
 
             # Unlabeled loss (FixMatch pseudo-labeling)
             with torch.no_grad():
+                # pseudo_logits = F.softmax(logits_u_w / args.T, dim=1)
+                # pseudo_labels = torch.argmax(pseudo_logits, dim=1)
+                # max_probs, _ = torch.max(pseudo_logits, dim=1)
+                # mask = max_probs.ge(threshold).float()
+                # with torch.no_grad():
                 pseudo_logits = F.softmax(logits_u_w / args.T, dim=1)
                 pseudo_labels = torch.argmax(pseudo_logits, dim=1)
-                max_probs, _ = torch.max(pseudo_logits, dim=1)
-                mask = max_probs.ge(threshold).float()
+
+                # Confidence
+                max_probs, _ = pseudo_logits.max(dim=1)
+                conf_mask = max_probs.ge(threshold)  # threshold ~ 0.95
+
+                # Margin between top-1 and top-2
+                top2 = torch.topk(pseudo_logits, 2, dim=1).values  # (batch_size, 2)
+                margins = top2[:, 0] - top2[:, 1]
+                margin_threshold = 0.25  # you can tune this
+                margin_mask = margins.ge(margin_threshold)
+
+                # Combined mask
+                mask = (conf_mask & margin_mask).float()
+
 
             loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
             loss = loss_x + lambda_u * loss_u
@@ -1131,7 +1195,7 @@ def active_learning_fixmatch(
                         x_u_s = random_bit_flip(x_u, n_bits=bit_flip)
                     elif args.aug == "random_bit_flip_bernoulli":
                         x_u_w = random_bit_flip_bernoulli(x_u, p=0.01)
-                        x_u_s = random_bit_flip_bernoulli(x_u, p=0.05)
+                        x_u_s = random_bit_flip_bernoulli(x_u, p=0.1)
                     elif args.aug == "random_bit_flip_and_mask":
                         x_u_w = random_bit_flip_and_mask(x_u, n_bits=1, n_mask=1)
                         x_u_s = random_bit_flip_and_mask(x_u, n_bits=bit_flip, n_mask=bit_flip)
@@ -1145,16 +1209,27 @@ def active_learning_fixmatch(
                     loss_x = criterion(logits_x, y_l)
                     with torch.no_grad():
                         # Pseudo-labels via FixMatch (confidence-based)
-                        pseudo_logits = F.softmax(logits_u_w, dim=1)
-                        pseudo_labels = torch.argmax(pseudo_logits, dim=1)
-                        max_probs, _ = torch.max(pseudo_logits, dim=1)
-                        mask = max_probs.ge(threshold).float()
+                        # pseudo_logits = F.softmax(logits_u_w / args.T, dim=1)
+                        # pseudo_labels = torch.argmax(pseudo_logits, dim=1)
+                        # max_probs, _ = torch.max(pseudo_logits, dim=1)
+                        # mask = max_probs.ge(threshold).float() 
 
-                        # Low confidence filtering
-                        pseudo_logits_low = F.softmax(logits_x, dim=1)
-                        max_probs_low, _ = torch.max(pseudo_logits_low, dim=1)
-                        low_confidence_mask = max_probs_low < threshold
-                        X_test_low_conf = x_u[low_confidence_mask]
+                        pseudo_logits = F.softmax(logits_u_w / args.T, dim=1)
+                        pseudo_labels = torch.argmax(pseudo_logits, dim=1)
+
+                        # Confidence
+                        max_probs, _ = pseudo_logits.max(dim=1)
+                        conf_mask = max_probs.ge(threshold)  # threshold ~ 0.95
+
+                        # Margin between top-1 and top-2
+                        top2 = torch.topk(pseudo_logits, 2, dim=1).values  # (batch_size, 2)
+                        margins = top2[:, 0] - top2[:, 1]
+                        margin_threshold = 0.25  # you can tune this
+                        margin_mask = margins.ge(margin_threshold)
+
+                        # Combined mask
+                        mask = (conf_mask & margin_mask).float()
+
 
                     # Standard FixMatch loss on high-confidence pseudo-labels
                     loss_u = (F.cross_entropy(logits_u_s, pseudo_labels, reduction='none') * mask).mean()
@@ -1237,7 +1312,7 @@ if __name__ == "__main__":
     # using argparse for taking arguments for number of bit flip
 
     parser = argparse.ArgumentParser(description="Run FixMatch with Bit Flip Augmentation")
-    parser.add_argument("--bit_flip", type=int, default=11, help="Number of bits to flip per sample")
+    parser.add_argument("--bit_flip", type=int, default=4, help="Number of bits to flip per sample")
     parser.add_argument("--labeled_ratio", type=float, default=0.4, help="Ratio of labeled data")
     parser.add_argument("--aug", type=str, default="random_bit_flip", help="Augmentation function to use")
     parser.add_argument("--seed", type=int, default=1, help="Random seed for reproducibility")

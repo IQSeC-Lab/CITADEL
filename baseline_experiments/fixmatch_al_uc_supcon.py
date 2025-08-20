@@ -156,9 +156,13 @@ def split_labeled_unlabeled(X, y, labeled_ratio=0.1, stratify=True, random_state
 def random_bit_flip(x, n_bits=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        flip_indices = torch.randperm(num_features)[:n_bits]
-        x_aug[i, flip_indices] = 1 - x_aug[i, flip_indices]
+
+    # Generate random bit indices to flip for each sample
+    flip_indices = torch.randint(0, num_features, (batch_size, n_bits), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_bits)
+
+    # Flip bits
+    x_aug[row_indices, flip_indices] = 1 - x_aug[row_indices, flip_indices]
     return x_aug
 
 def random_bit_flip_bernoulli(x, p=None, n_bits=None):
@@ -184,12 +188,16 @@ def random_bit_flip_bernoulli(x, p=None, n_bits=None):
     x_aug = torch.abs(x_aug - flip_mask)
     return x_aug
 
+
 def random_feature_mask(x, n_mask=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        mask_indices = torch.randperm(num_features)[:n_mask]
-        x_aug[i, mask_indices] = 0
+
+    # Random mask indices (may contain duplicates)
+    mask_indices = torch.randint(0, num_features, (batch_size, n_mask), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_mask)
+
+    x_aug[row_indices, mask_indices] = 0
     return x_aug
 
 def random_bit_flip_and_mask(x, n_bits=1, n_mask=1):
@@ -1452,8 +1460,6 @@ def plot_f1_fnr(years, f1s, fnrs, save_path="f1_fnr_fixmatch_baseline_with_al.pn
 
 # === Main Execution ===
 if __name__ == "__main__":
-    # here we take the number of bit flip as argument
-    # using argparse for taking arguments for number of bit flip
 
     parser = argparse.ArgumentParser(description="Run FixMatch with Bit Flip Augmentation")
     parser.add_argument("--bit_flip", type=int, default=11, help="Number of bits to flip per sample")
@@ -1468,7 +1474,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', '--learning-rate', default=0.03, type=float, help='initial learning rate')
     parser.add_argument('--warmup', default=0, type=float, help='warmup epochs (unlabeled data based)')
     parser.add_argument('--lp', default=2.0, type=float, help='Lp norm for uncertainty sampling (e.g., 1.0, 2.0, 2.5)')
-    parser.add_argument('--budget', default=200, type=int, help='Budget for active learning (number of samples to select)')
+    parser.add_argument('--budget', default=400, type=int, help='Budget for active learning (number of samples to select)')
     parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
     parser.add_argument('--retrain_epochs', default=70, type=int, help='Number of retraining epochs after initial training')
     parser.add_argument('--save_path', type=str, default='results/al_uc/', help='Path to save results')

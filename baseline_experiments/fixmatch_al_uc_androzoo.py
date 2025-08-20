@@ -23,14 +23,14 @@ from sklearn.cluster import KMeans
 
 # Global font settings
 plt.rcParams.update({
-    "font.size": 14,
+    "font.size": 19,
     "font.weight": "bold",
     "axes.labelweight": "bold",
     "axes.titlesize": 16,
     "axes.titleweight": "bold",
-    "xtick.labelsize": 13,
-    "ytick.labelsize": 13,
-    "legend.fontsize": 13,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14,
+    "legend.fontsize": 18,
     "legend.frameon": False
 })
 
@@ -156,9 +156,13 @@ def split_labeled_unlabeled(X, y, labeled_ratio=0.1, stratify=True, random_state
 def random_bit_flip(x, n_bits=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        flip_indices = torch.randperm(num_features)[:n_bits]
-        x_aug[i, flip_indices] = 1 - x_aug[i, flip_indices]
+
+    # Generate random bit indices to flip for each sample
+    flip_indices = torch.randint(0, num_features, (batch_size, n_bits), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_bits)
+
+    # Flip bits
+    x_aug[row_indices, flip_indices] = 1 - x_aug[row_indices, flip_indices]
     return x_aug
 
 def random_bit_flip_bernoulli(x, p=None, n_bits=None):
@@ -184,12 +188,16 @@ def random_bit_flip_bernoulli(x, p=None, n_bits=None):
     x_aug = torch.abs(x_aug - flip_mask)
     return x_aug
 
+
 def random_feature_mask(x, n_mask=1):
     x_aug = x.clone()
     batch_size, num_features = x.shape
-    for i in range(batch_size):
-        mask_indices = torch.randperm(num_features)[:n_mask]
-        x_aug[i, mask_indices] = 0
+
+    # Random mask indices (may contain duplicates)
+    mask_indices = torch.randint(0, num_features, (batch_size, n_mask), device=x.device)
+    row_indices = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, n_mask)
+
+    x_aug[row_indices, mask_indices] = 0
     return x_aug
 
 def random_bit_flip_and_mask(x, n_bits=1, n_mask=1):
@@ -839,83 +847,6 @@ def active_learning_step(args, year_month, model, X_labeled, y_labeled, X_test, 
     return X_labeled, y_labeled, X_unlabeled, y_unlabeled
 
 
-# ---------- Active learning step considering low-confidence samples separated----------
-# def active_learning_step(args, model, X_labeled, y_labeled, X_test, y_test, top_k=200, confidence_threshold=0.7):
-#     """
-#     Performs one step of active learning:
-#     1. Filters low-confidence test samples.
-#     2. Selects top-k most uncertain samples from them.
-#     3. Moves those to labeled set.
-#     4. Puts the rest (including high-confidence) into the unlabeled set.
-#     """
-#     device = X_labeled.device
-
-#     # Step 0: Get low-confidence sample indices
-#     low_conf_indices, high_conf_indices, confidences = get_low_confidence_indices(model, X_test, threshold=0.98)
-#     print(f"Found {len(low_conf_indices)} low-confidence samples out of {X_test.size(0)} total samples.")
-#     print(f"Found {len(high_conf_indices)} high-confidence samples out of {X_test.size(0)} total samples.")
-#     if low_conf_indices.numel() == 0:
-#         print("No low-confidence samples found.")
-#         return X_labeled, y_labeled, X_test, y_test
-
-#     # Step 1: Filter low-confidence test set
-#     X_test_lowconf = X_test[low_conf_indices]
-#     y_test_lowconf = y_test[low_conf_indices]
-
-#     X_test_highconf = X_test[high_conf_indices]
-#     y_test_highconf = y_test[high_conf_indices]
-
-#     # how many high confident samples are misclassified?
-#     with torch.no_grad():
-#         logits = model(X_test_lowconf.to(device))
-#         logits_highconf = model(X_test_highconf.to(device))
-#         preds = logits.argmax(dim=1).cpu()
-#         preds_highconf = logits_highconf.argmax(dim=1).cpu()
-#         true_labels = y_test_lowconf.cpu()
-#         true_labels_highconf = y_test_highconf.cpu()
-#         num_misclassified = (preds != true_labels).sum().item()
-#         num_misclassified_highconf = (preds_highconf != true_labels_highconf).sum().item()
-#         print(f"Low confidence samples misclassified: {num_misclassified} out of {len(y_test_lowconf)}")
-#         print(f"High confidence samples misclassified: {num_misclassified_highconf} out of {len(y_test_highconf)}")
-
-#     # Step 2: Get most uncertain from low-confidence subset
-#     # NOTE: either use uncertainty sampling or boundary selection
-#     # uncertain_indices_in_lowconf, _ = get_uncertain_samples(
-#     #     model, X_labeled, X_test_lowconf, p=args.lp, top_k=top_k
-#     # )
-    
-#     # low confident boundary sample
-#     # uncertain_indices_in_lowconf, _ = select_boundary_samples(
-#     #     model, X_test_lowconf, y_test_highconf, top_k=top_k, batch_size=512
-#     # )
-#     # print(f"Selected {len(uncertain_indices_in_lowconf)} uncertain samples from low-confidence subset.")
-
-#     # high confidence boundary sample
-#     uncertain_indices_in_highconf, _ = select_boundary_samples(
-#         model, X_test_highconf, y_test_highconf, top_k=top_k, batch_size=512
-#     )
-#     print(f"Selected {len(uncertain_indices_in_highconf)} uncertain samples from low-confidence subset.")
-
-#     # Step 3: Map selected uncertain indices back to X_test
-#     final_selected_indices = high_conf_indices[uncertain_indices_in_highconf]
-
-#     # Step 4: Create mask to keep remaining samples in unlabeled pool
-#     remaining_mask = torch.ones(X_test.size(0), dtype=torch.bool, device=device)
-#     remaining_mask[final_selected_indices] = False
-
-#     # Step 5: Update labeled and unlabeled sets
-#     X_new_labeled = X_test[final_selected_indices]
-#     y_new_labeled = y_test[final_selected_indices]
-
-#     X_unlabeled = X_test[remaining_mask]
-#     y_unlabeled = y_test[remaining_mask]  # Optional, for evaluation
-
-#     X_labeled = torch.cat([X_labeled, X_new_labeled], dim=0)
-#     y_labeled = torch.cat([y_labeled, y_new_labeled], dim=0)
-
-#     return X_labeled, y_labeled, X_unlabeled, y_unlabeled
-
-
 
 
 # Uncertainty sampling with decision boundary focus (median ± MAD)
@@ -1232,17 +1163,20 @@ def active_learning_fixmatch(
             if args.al == True:
 
                 # Select samples based on uncertainty sampling
-                X_labeled, y_labeled, X_test, y_test = active_learning_step(
-                    args=args,
-                    year_month=year_month,
-                    model=model,
-                    X_labeled=X_labeled,
-                    y_labeled=y_labeled,
-                    X_test=X_test,
-                    y_test=y_test,
-                    top_k=args.budget,  # Use budget as top_k
-                    # confidence_threshold=threshold
-                )
+                if args.self_training == True:
+                    print("Self-training does not select any samples for active learning.")
+                else:
+                    X_labeled, y_labeled, X_test, y_test = active_learning_step(
+                        args=args,
+                        year_month=year_month,
+                        model=model,
+                        X_labeled=X_labeled,
+                        y_labeled=y_labeled,
+                        X_test=X_test,
+                        y_test=y_test,
+                        top_k=args.budget,  # Use budget as top_k
+                        # confidence_threshold=threshold
+                    )
 
                 
                 X_unlabeled = X_unlabeled.cpu()
@@ -1485,6 +1419,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_path', type=str, default='results/al_uc/', help='Path to save results')
     # parse arugments for uncertainty sampling option 1. lp-norm, 2. boundary selection 3. priority 4. hybrid
     parser.add_argument('--al', action='store_true', help='Enable Active Learning (default: False)')
+    parser.add_argument('--self_training', action='store_true', help='Does not enable Active Learning (default: False)')
     parser.add_argument('--unc_samp', type=str, default='lp-norm', choices=['lp-norm', 'boundary', 'priority', 'hybrid'], help='Uncertainty sampling method to use')
     parser.add_argument('--lambda_supcon', default=0.5, type=float, help='Coefficient of supervised contrastive loss.')
     parser.add_argument("--strategy", type=str, default="_", help="any strategy (keywork) to use")

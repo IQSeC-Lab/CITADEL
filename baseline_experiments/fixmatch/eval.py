@@ -9,7 +9,7 @@ from sklearn.metrics import (
 import plot_gen
 import numpy as np
 import torch.nn.functional as F
-import faiss
+# import faiss
 from sklearn.metrics import pairwise_distances
 
 

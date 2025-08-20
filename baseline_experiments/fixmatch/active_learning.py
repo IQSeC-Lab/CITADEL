@@ -241,7 +241,7 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
 
     if args.pretrained_model:
         logging.info(f"Loading pretrained model....")
-        fixMatch.load_model(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.pretrained_model_path}")
+        fixMatch.load_model(f"/home/mhaque3/myDir/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.pretrained_model_path}")
     else:
         logging.info(f"Training from scratch...")
         best_loss = float('inf')
@@ -320,18 +320,18 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
         # Restore best model after training
         if best_state_dict is not None:
             fixMatch.update_model(best_state_dict)
-            fixMatch.save_model(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.pretrained_model_path}")
+            fixMatch.save_model(f"/home/mhaque3/myDir/SSL-malware/baseline_experiments/fixmatch/results/checkpoints/{args.pretrained_model_path}")
 
         # Save losses to CSV after each epoch
         loss_log_df = pd.DataFrame(loss_log)
-        loss_log_df.to_csv(f"/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_ssl_loss.csv", index=False)
+        loss_log_df.to_csv(f"/home/mhaque3/myDir/SSL-malware/baseline_experiments/fixmatch/results/{args.strategy}_ssl_loss.csv", index=False)
             
     # === Evaluate on each year's test set ===
     # eval.model_evaluate(fixMatch.get_model(), test_sets_by_year, args.strategy)
     # Active learning loop: month by month
     
-    for p_value in [1.0, 1.5, 1.8, 1.9, 2.0, 2.1, 2.2]:
-        for budget in [50, 100, 200, 400]:
+    for p_value in [2.0]:
+        for budget in [400]:
             start = time.time()
             # Your code block
             args.budget = budget
@@ -519,7 +519,7 @@ def train_fixmatch_drift_eval(args, model, X_labeled, y_labeled, y_labeled_binar
             print(f"##Execution time: {end - start:.4f} seconds")
 
             # Append to CSV file
-            with open(f'/home/ihossain/ISMAIL/SSL-malware/baseline_experiments/fixmatch/results/model_performance_{args.aug}_p_values_budgets.csv', mode='a', newline='') as file:
+            with open(f'/home/mhaque3/myDir/SSL-malware/baseline_experiments/fixmatch/results/model_performance_{args.aug}_p_values_budgets.csv', mode='a', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow([args.p_value, args.budget, avg_f1, avg_fnr, avg_fpr, (end - start)])  # appends a single row
 
@@ -532,7 +532,7 @@ if __name__ == "__main__":
     parser.add_argument("--bit_flip", type=int, default=4, help="Number of bits to flip per sample")
     parser.add_argument("--labeled_ratio", type=float, default=0.4, help="Ratio of labeled data")
     parser.add_argument("--aug", type=str, default="random_bit_flip", help="Augmentation function to use")
-    parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
+    parser.add_argument("--seed", type=int, default=11, help="Random seed for reproducibility")
     parser.add_argument('--lambda-u', default=1.0, type=float, help='coefficient of unlabeled loss')
     parser.add_argument('--p_value', default=2.0, type=float, help='P value for dist matric')
     parser.add_argument('--T', default=1, type=float, help='pseudo label temperature')
@@ -545,12 +545,12 @@ if __name__ == "__main__":
     parser.add_argument('--pretrained_model', default=True, type=bool, help='Whether to use pretrained model or not')
     parser.add_argument("--epochs", type=int, default=250, help="Number of epochs for SSL training")
     parser.add_argument("--retrain_epochs", type=int, default=100, help="Number of epochs for SSL retraining")
-    parser.add_argument("--budget", type=int, default=150, help="Number of budget for SSL retraining")
+    parser.add_argument("--budget", type=int, default=200, help="Number of budget for SSL retraining")
     parser.add_argument("--k_nearest_neighbors", type=int, default=200, help="Number of nearest neighbors for SSL retraining")
     parser.add_argument("--pretrained_model_path", type=str, default="", help="Path to the pretrained model if any")
 
     args = parser.parse_args()
-    args.seed = 0
+    args.seed = 11
     SEED = args.seed  # You can set this to any integer you like
 
     random.seed(SEED)
@@ -568,16 +568,16 @@ if __name__ == "__main__":
     args.aug = "random_bit_flip"
     args.budget = 400
     args.k_nearest_neighbors = 450
-    args.p_value = 1.9
+    args.p_value = 2.0
 
-    args.pretrained_model = True
+    args.pretrained_model = False
     args.pretrained_model_path = f"fixmatch_hidistloss_w_al_{args.aug}_{str(n_bit_flip)}_lbr_{str(labeled_ratio)}_ep{str(args.epochs)}_model.pth"
 
     args.strategy = f"fixmatch_hidistloss_w_al_" + args.aug + "_" + str(n_bit_flip) + "_lbr_" + str(labeled_ratio) +  "_seed_" + str(args.seed) + "_ep" + str(args.epochs) + "_retrain_ep" + str(args.retrain_epochs) + "_budget" + str(args.budget) + "_k" + str(args.k_nearest_neighbors) + "_p" + str(args.p_value)
     print(f"Running {strategy}...")
     print(f"Using {n_bit_flip} bits to flip per sample.")
 
-    path = "/home/ihossain/ISMAIL/Datasets/data/gen_apigraph_drebin/"
+    path = "/home/mhaque3/myDir/data/gen_apigraph_drebin/"
     # Load data
     X_2012_labeled, y_2012_labeled, y_2012_bin_labeled, X_2012_unlabeled = utils.get_dataset(path)
 

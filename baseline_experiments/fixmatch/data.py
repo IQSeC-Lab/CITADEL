@@ -36,7 +36,7 @@ def data_flip_and_save(X_train, y_train, X_test, y_test, path, month):
 if __name__ == "__main__":
     # print(f"Running {strategy}...")
     # Load data
-    path = "/home/ihossain/ISMAIL/Datasets/data/gen_apigraph_drebin/"
+    path = "/home/mhaque3/myDir/data/gen_apigraph_drebin"
     file_path = f"{path}2012-01to2012-12_selected.npz"
     data = np.load(file_path, allow_pickle=True)
     X, y = data['X_train'], data['y_train']
