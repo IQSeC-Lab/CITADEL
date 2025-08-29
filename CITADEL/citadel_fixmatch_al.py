@@ -151,10 +151,10 @@ def active_learning_fixmatch(
     unlabeled_ds = TensorDataset(X_unlabeled, y_unlabeled)
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler
 
-    labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=batch_size, drop_last=True)
+    labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=args.batch_size, drop_last=True)
     # labeled_loader = DataLoader(labeled_ds, batch_size=batch_size, shuffle=True)
 
-    unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=batch_size, drop_last=True)
+    unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=args.batch_size, drop_last=True)
 
     criterion = nn.CrossEntropyLoss(reduction='mean')
 
@@ -162,7 +162,7 @@ def active_learning_fixmatch(
     lambda_supcon = 0.5  # You can tune this
 
 
-    scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, epochs)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, args.epochs)
     
     best_loss = float('inf')
     best_state_dict = None
@@ -170,7 +170,7 @@ def active_learning_fixmatch(
     # mu = 1  # FixMatch default
     # interleave_size = 2 * mu + 1
     # lambda_triplet = 1
-    for epoch in range(epochs):
+    for epoch in range(args.epochs):
         model.train()
         total_loss = 0
         labeled_iter = iter(labeled_loader)
@@ -238,8 +238,6 @@ def active_learning_fixmatch(
                 loss_supcon = supcon_loss_fn(features, y_l)
                 loss += lambda_supcon * loss_supcon
 
-            # ====== Total Loss ======
-            # loss = loss_x + lambda_u * loss_u
 
             optimizer.zero_grad()
             loss.backward()
@@ -272,18 +270,33 @@ def active_learning_fixmatch(
     # Active learning loop
     metrics_list = []
     model.eval()
-    args.start_year, args.start_month = 2013, 7
-    args.end_year, args.end_month = 2018, 12
-    for year in range(args.start_year, args.end_year + 1):
+    # args.start_year, args.start_month = 2013, 7
+    # args.end_year, args.end_month = 2018, 12
+    # need to know why the program is not entering the for loop
+    print(f"Loading data from start year {args.al_start_year} and end year {args.al_end_year}...")
+    for year in range(args.al_start_year, args.al_end_year + 1):
         for month in range(1, 13):
-            if (year == args.start_year and month < args.start_month) or (year == args.end_year and month > args.end_month):
+            if (year == args.al_start_year and month < args.al_start_month) or (year == args.al_end_year and month > args.al_end_month):
+                print(f"Skipping year {year} month {month}...")
                 continue
             try:
+                print(f"Loading data for {year}-{month:02d}...")
                 with torch.no_grad():
-                    data = np.load(f"{path}{year}-{month:02d}_selected.npz")
-                    X_raw = data["X_train"]
-                    y_true = (data["y_train"] > 0).astype(int)
-                    X_test = torch.tensor(X_raw, dtype=torch.float32).cuda()
+                    if args.dataset == 'lamda':
+                        npz_file = f"{path}{year}-{month:02d}_X_test.npz"
+                        X_test = load_npz(npz_file)
+                        X_test = X_test.toarray()
+                        print(f"Shape of the test data: {X_test.shape}")
+                        meta = f"{path}{year}-{month:02d}_meta_test.npz"
+                        # all_test_family = np.load(meta, allow_pickle=True)['family']
+                        y_true = np.load(meta, allow_pickle=True)['y']
+                    else:
+                        new_path = os.path.join(args.data_dir, f"{year}-{month:02d}_selected.npz")
+                        data = np.load(new_path)
+                        print(f"Data keys: {data.files}")
+                        X_test = data["X_train"]
+                        y_true = (data["y_train"] > 0).astype(int)
+                    X_test = torch.tensor(X_test, dtype=torch.float32).cuda()
                     y_test = torch.tensor(y_true, dtype=torch.long).cuda()
 
                     logits = model(X_test)
@@ -300,6 +313,7 @@ def active_learning_fixmatch(
                     year_month = f"{year}-{month:02d}"
                     print(f"Evaluating {year_month}...")
                     metrics = evaluate_model(model, X_test, y_test, year_month, num_classes=num_classes)
+                    
                     acc = metrics['accuracy']
                     prec = metrics['precision']
                     rec = metrics['recall']
@@ -345,8 +359,8 @@ def active_learning_fixmatch(
                 labeled_ds = TensorDataset(X_labeled, y_labeled)
 
 
-                labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=al_batch_size, drop_last=True)
-                unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=al_batch_size, drop_last=True)
+                labeled_loader = DataLoader(labeled_ds, sampler=train_sampler(labeled_ds), batch_size=args.al_batch_size, drop_last=True)
+                unlabeled_loader = DataLoader(unlabeled_ds, sampler=train_sampler(unlabeled_ds), batch_size=args.al_batch_size, drop_last=True)
                 criterion = nn.CrossEntropyLoss(reduction='mean')
 
                 supcon_loss_fn = SupConLoss(temperature=0.07)
@@ -366,13 +380,13 @@ def active_learning_fixmatch(
                                     momentum=0.9, nesterov=args.nesterov)
                 
                 # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-                scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, epochs)
+                scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, args.epochs)
                 
                 best_loss = float('inf')
                 best_state_dict = None
 
 
-                for epoch in range(retrain_epochs):
+                for epoch in range(args.retrain_epochs):
                     model.train()
                     total_loss = 0
                     labeled_iter = iter(labeled_loader)
@@ -475,6 +489,8 @@ if __name__ == "__main__":
     parser.add_argument('--budget', default=400, type=int, help='Budget for active learning (number of samples to select)')
     parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
     parser.add_argument('--retrain_epochs', default=70, type=int, help='Number of retraining epochs after initial training')
+    parser.add_argument('--batch_size', default=512, type=int, help='Training batch size')
+    parser.add_argument('--al_batch_size', default=512, type=int, help='Active learnign training batch size')
     parser.add_argument('--save_path', type=str, default='results/CITADEL/', help='Path to save results')
     # parse arugments for uncertainty sampling option 1. lp-norm, 2. boundary selection 3. hybrid
     parser.add_argument('--unc_samp', type=str, default='lp-norm', choices=['lp-norm', 'boundary', 'priority', 'hybrid'], help='Uncertainty sampling method to use')
@@ -482,17 +498,17 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="_", help="any strategy (keywork) to use")
     parser.add_argument('--al', action='store_true', help='Enable Active Learning (default: False)')
     # Time window arguments
-    parser.add_argument('--start_year', type=int, default=2013, help='Start year for testing (e.g., 2013)')
-    parser.add_argument('--start_month', type=int, default=7, help='Start month for testing (e.g., 7 for July)')
-    parser.add_argument('--end_year', type=int, default=2018, help='End year for testing (e.g., 2018)')
-    parser.add_argument('--end_month', type=int, default=12, help='End month for testing (e.g., 12 for December)')
+    parser.add_argument('--al_start_year', type=int, default=2013, help='Start year for testing (e.g., 2013)')
+    parser.add_argument('--al_start_month', type=int, default=7, help='Start month for testing (e.g., 7 for July)')
+    parser.add_argument('--al_end_year', type=int, default=2018, help='End year for testing (e.g., 2018)')
+    parser.add_argument('--al_end_month', type=int, default=12, help='End month for testing (e.g., 12 for December)')
     parser.add_argument('--supcon', action='store_true', help='Enable Supervised Contrastive loss (default: False)')
     parser.add_argument('--dataset', type=str.lower, default='apigraph', choices=['apigraph', 'chen-androzoo', 'lamda'], \
         help='Dataset to use: apigraph (2012–2018), chen-androzoo (2019–2021), or lamda (2013–2025).')
-    parser.add_argument('--data-dir', type=str, default=None, help='Path to the dataset.')
+    parser.add_argument('--data_dir', type=str, default=None, help='Path to the dataset.')
 
     args = parser.parse_args()
-
+    print(args)
     os.makedirs(args.save_path, exist_ok=True)
 
     # Set random seeds for reproducibility
@@ -508,18 +524,21 @@ if __name__ == "__main__":
     if args.dataset == 'apigraph':
         path = os.path.join(args.data_dir, '2012-01to2012-12_selected.npz')
         # file_path = f"{args.data_dir}2012-01to2012-12_selected.npz"
+        print(f"Loading data from {path}...")
         data = np.load(path, allow_pickle=True)
         X, y = data['X_train'], data['y_train']
         y = np.array([0 if label == 0 else 1 for label in y])
 
     elif args.dataset == 'chen-androzoo':
-        path = os.path.join(args.data_dir, '2012-01to2012-12_selected.npz')
+        path = os.path.join(args.data_dir, '2019-01to2019-12_selected.npz')
+        print(f"Loading data from {path}...")
         # file_path = f"{path}2019-01to2021-12_selected.npz"
         data = np.load(path, allow_pickle=True)
         X, y = data['X_train'], data['y_train']
         y = np.array([0 if label == 0 else 1 for label in y])
     elif args.dataset == 'lamda':
         path_X = os.path.join(args.data_dir, '2013_X_train.npz')
+        print(f"Loading data from {path_X}...")
         X_train = load_npz(path_X)
         X = X_train.toarray()
         path_y = os.path.join(args.data_dir, '2013_meta_train.npz')
