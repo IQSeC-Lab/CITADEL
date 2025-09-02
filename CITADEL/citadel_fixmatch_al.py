@@ -144,8 +144,7 @@ def append_to_strategy(s):
 
 def active_learning_fixmatch(
     model, optimizer, X_labeled, y_labeled, X_unlabeled, y_unlabeled,
-    args, num_classes=2, threshold=0.95, lambda_u=1.0, epochs=200, retrain_epochs=70, batch_size=512,
-    al_batch_size=512, margin=1.0
+    args, num_classes=2, threshold=0.95, lambda_u=1.0
 ):
     labeled_ds = TensorDataset(X_labeled, y_labeled)
     unlabeled_ds = TensorDataset(X_unlabeled, y_unlabeled)
@@ -283,11 +282,13 @@ def active_learning_fixmatch(
                 print(f"Loading data for {year}-{month:02d}...")
                 with torch.no_grad():
                     if args.dataset == 'lamda':
-                        npz_file = f"{path}{year}-{month:02d}_X_test.npz"
+                        NEW_PATH = os.path.join(os.path.dirname(args.data_dir.rstrip('/')), 'Baseline_npz_monthwise', 'test')
+                        npz_file = os.path.join(NEW_PATH, f"{year}-{month:02d}_X_test.npz")
+                        print(f"Loading test data from {npz_file}...")
                         X_test = load_npz(npz_file)
                         X_test = X_test.toarray()
                         print(f"Shape of the test data: {X_test.shape}")
-                        meta = f"{path}{year}-{month:02d}_meta_test.npz"
+                        meta = os.path.join(NEW_PATH, f"{year}-{month:02d}_meta_test.npz")
                         # all_test_family = np.load(meta, allow_pickle=True)['family']
                         y_true = np.load(meta, allow_pickle=True)['y']
                     else:
@@ -327,6 +328,7 @@ def active_learning_fixmatch(
                     print(f"Year {year_month}: Acc={acc:.4f}, Prec={prec:.4f}, Rec={rec:.4f}, F1={f1:.4f}, FNR={fnr:.4f}, FPR={fpr:.4f}, ROC-AUC={roc_auc:.4f}, PR-AUC={pr_auc:.4f}")
 
             except FileNotFoundError:
+                print(f"Data for {year}-{month:02d} not found. Skipping...")
                 continue
             # --- Active learning: select most uncertain samples from X_unlabeled ---
             # X_unlabeled = X_test.clone()
@@ -554,7 +556,7 @@ if __name__ == "__main__":
     # n_bit_flip = args.bit_flip
     # labeled_ratio = args.labeled_ratio
 
-    strategy = f"CITADEL_fixmatch_" + args.aug + "_" + "_lbr_" + str(args.labeled_ratio) +  "_seed_" + str(args.seed)
+    strategy = f"CITADEL_" + args.dataset + "_" + args.aug + "_" + "_lbr_" + str(args.labeled_ratio) +  "_seed_" + str(args.seed)
     append_to_strategy(f"_{args.strategy}")
     append_to_strategy(f"_{args.budget}")
     append_to_strategy(f"_lp_{args.lp}")
