@@ -46,9 +46,11 @@ conda activate citadel-env
 ### Hardware Requirements
 - CUDA-supported GPU (≥ 32 GB memory recommended)
 - System RAM (≥ 32 GB)
+
 We implemented and evaluated CITADEL on a dedicated research server equipped with:
 - NVIDIA H100 NVL GPU
 - 1.0 TB RAM
+
 We also successfully ran experiments on **Google Colab Pro**
 
 ### Software Requirements
