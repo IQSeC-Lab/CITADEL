@@ -36,3 +36,4 @@ dependencies:
       - scikit-multilearn
       - imbalanced-learn
       - lightning  # PyTorch Lightning
+      - huggingface_hub

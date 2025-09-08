@@ -20,19 +20,6 @@ The following figure shows the high-level pipeline of **CITADEL**:
   <img src="CITADEL/figures/citadel_framework.png" alt="CITADEL Pipeline" width="600"/>
 </p>
 
-## Datasets
-
-We evaluate on three Android malware datasets. Please follow the steps below to download and preprocess them:
-
-We use the datasets provided in the paper "Continuous Learning for Android Malware Detection" and their GitHub repository: [active-learning](https://github.com/wagner-group/active-learning).  
-
-### Download APIGraph (2012–2018) and Chen-AZ (2019-2021) dataset
-- Download the datasets [here](https://drive.google.com/file/d/1O0upEcTolGyyvasCPkZFY86FNclk29XO/view?usp=drive_link) provided by the [this](https://github.com/wagner-group/active-learning) repository.
-- Extract the downloaded zip into the `data/` directory:  `data/gen_apigraph_drebin` and `data/gen_androzoo_drebin`
-
-### Download LAMDA (2013-2025) dataset
-- use LAMDA official github repository [here](https://github.com/IQSeC-Lab/LAMDA) to download the dataset. You can also download the .npz format from [here](https://drive.google.com/drive/folders/19ysGjy5SU767lUBwc5-jLGTAmNas7W7P?usp=sharing).
-
 
 ## Requirements & Installation
 
@@ -48,7 +35,7 @@ conda activate citadel-env
 - System RAM (≥ 32 GB)
 
 We implemented and evaluated CITADEL on a dedicated research server equipped with:
-- NVIDIA H100 NVL GPU
+- 4 x NVIDIA H100 NVL GPU
 - 1.0 TB RAM
 
 We also successfully ran experiments on **Google Colab Pro**
@@ -59,8 +46,44 @@ We also successfully ran experiments on **Google Colab Pro**
 - NumPy, Pandas, Matplotlib, SciPy
 - scikit-learn, tqdm, tensorboard
 
-All dependencies are specified in:
-- environment.yml (Conda)
+All dependencies are specified in: `environment.yml` (Conda)
+
+
+## Datasets
+
+We evaluate on three Android malware datasets:
+
+- APIGraph (2012–2018)
+- Chen-AndroZoo (2019–2021)
+- LAMDA (2013–2025)
+
+Please follow the steps below to download and preprocess them:
+
+For APIGraph and Chen-AndroZoo, For APIGraph and Chen-AndroZoo, we use the datasets provided in the paper "Continuous Learning for Android Malware Detection", which are available through their official [active-learning](https://github.com/wagner-group/active-learning).  
+
+### Download APIGraph (2012–2018) and Chen-AZ (2019-2021) dataset
+- Download the datasets [here](https://drive.google.com/file/d/1O0upEcTolGyyvasCPkZFY86FNclk29XO/view?usp=drive_link) provided by the [active-learning](https://github.com/wagner-group/active-learning) repository.
+- Extract the downloaded zip into the `data/` directory:  `data/gen_apigraph_drebin` and `data/gen_androzoo_drebin`
+
+### Download LAMDA (2013-2025) dataset
+The **LAMDA** dataset (2013–2025) is provided by [IQSeC-Lab](https://github.com/IQSeC-Lab/LAMDA) and hosted on Hugging Face.
+
+#### Download Instructions:
+
+To automatically download and preprocess the dataset, run the following command:
+
+```bash
+python download_LAMDA.py
+```
+This script will download the LAMDA baseline which is a Drebin feature-based Android malware dataset (in .npz format) then, split the .npz files into month-wise subsets.
+
+The resulting directory structure will be automatically organized under:
+
+LAMDA_dataset/
+├── NPZ_Version/
+│   ├── npz_Baseline/
+│   └── npz_Baseline_MonthWise/
+
 
 ## Running CITADEL
 
@@ -72,10 +95,10 @@ CITADEL integrates:
 To run **CITADEL** on all three Android malware benchmark datasets (**API-Graph, Chen-AndroZoo, LAMDA**) with a labeling budget of **400**, use:
 
 ```bash
-./CITADEL/run_scripts.sh
+./CITADEL/run_citadel.sh
 ```
 
-#### Example: Running CITADEL with Active Learning on API-Graph
+#### Example: Running CITADEL with Active Learning on API-Graph for 400 labeling budget
 
 ```bash
 ## Script to run CITADEL with active learning on the API-Graph dataset
@@ -125,79 +148,19 @@ CUDA_VISIBLE_DEVICES=1 nohup python -u CITADEL/citadel_fixmatch_al.py \
 
 ```
 
+
 Please make sure that we provide the correct dataset argument name with appropriate directory. The above command will also work on LAMDA dataset by changing the argument dataset name and directory. 
 
-To run CITADEL on Chen-AndroZoo:
-The **Chen-AndroZoo** dataset contains **16k+ features**, which increases memory requirements.  
-To ensure stable training, we recommend reducing the **batch size** to `128` and the **learning rate** to `0.003`.
+
+The output results will be saved in both a CSV file and a log file inside the CITADEL_results directory.
+
+- The CSV file contains detailed scores for each evaluation month, where each row represents the test performance for a specific month.
+
+- The log file includes the full training and evaluation logs. At the end of the log, you can find the average performance of CITADEL across all months, including mean F1 score, False Negative Rate (FNR), and False Positive Rate (FPR).
+
+You can also use the CSV file to manually compute or verify the average F1 score, FNR, and FPR across all test months.
 
 
----
-
-## Table II – CITADEL Performance (without Active Learning)
-
-To reproduce **Table II** (baseline CITADEL without Active Learning), run the following command:
-
-```bash
-LABEL_RATIOS=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-AUGS=("random_bit_flip_bernoulli" "random_bit_flip" "random_bit_flip_and_mask" "random_feature_mask")
-
-DATASET="apigraph"   # change to "androzoo" or "lamda" as needed
-DATA_DIR="/home/mhaque3/myDir/data/gen_apigraph_drebin/"
-BATCH_SIZE=512
-LR=0.03
-
-mkdir -p CITADEL_table2
-
-for AUG in "${AUGS[@]}"
-do
-    for RATIO in "${LABEL_RATIOS[@]}"
-    do
-        TS=$(date "+%m.%d-%H.%M.%S")
-        LOGFILE="CITADEL_results/citadel_no_al_${DATASET}_${AUG}_ratio_${RATIO}_${TS}.log"
-        echo "Running: Dataset=$DATASET | Aug=$AUG | Ratio=$RATIO"
-
-        CUDA_VISIBLE_DEVICES=1 nohup python -u CITADEL/citadel_fixmatch_al.py \
-            --dataset $DATASET \
-            --data_dir $DATA_DIR \
-            --lr $LR \
-            --epochs 200 \
-            --batch_size $BATCH_SIZE \
-            --labeled_ratio $RATIO \
-            --lambda_supcon 0.5 \
-            --supcon \
-            --aug $AUG \
-            --seed 220 \
-            --strategy CITADEL \
-            --save_path CITADEL_table2 > $LOGFILE 2>&1 &
-    done
-done
-
-
-# CUDA_VISIBLE_DEVICES=1 nohup python -u CITADEL/citadel_fixmatch_al.py \
-#     --dataset <DATASET_NAME> \
-#     --data_dir <DATASET_PATH> \
-#     --lr <LEARNING_RATE> \
-#     --epochs 200 \
-#     --batch_size <BATCH_SIZE> \
-#     --labeled_ratio 0.4 \
-#     --lambda_supcon 0.5 \
-#     --supcon \
-#     --aug random_bit_flip_bernoulli \
-#     --seed 220 \
-#     --strategy CITADEL \
-#     --save_path CITADEL_results > CITADEL_results/citadel_no_al_<DATASET_NAME>.log 2>&1 &
-```
-
-### Dataset-specific Configurations
-#### APIGraph
-```bash
---dataset apigraph
---data_dir /home/mhaque3/myDir/data/gen_apigraph_drebin/
---batch_size 512
---lr 0.03
-
-```
 
 ### Key Arguments
 | Argument           | Description                                                              |
@@ -226,7 +189,56 @@ done
 
 
 
+
+
+To run CITADEL on Chen-AndroZoo:
+The **Chen-AndroZoo** dataset contains **16k+ features**, which increases memory requirements.  
+To ensure stable training, we recommend reducing the **batch size** to `128` and the **learning rate** to `0.003`. Change the following arguments to run on Chen-AndroZoo dataset.
+
+
+```bash
+DATASET="chen-androzoo"
+DATA_DIR="/home/mhaque3/myDir/data/gen_androzoo_drebin/"
+LR=0.003
+BATCH_SIZE=128
+AL_BATCH_SIZE=128
+
+AL_START_YEAR=2020
+AL_START_MONTH=7
+AL_END_YEAR=2021
+AL_END_MONTH=12
+```
+
+To run CITADEL on LAMDA, change the following arguments.
+
+
+```bash
+DATASET="lamda"
+DATA_DIR="./LAMDA_dataset/NPZ_Version/npz_Baseline"
+LR=0.03
+BATCH_SIZE=512
+AL_BATCH_SIZE=512
+
+AL_START_YEAR=2014
+AL_START_MONTH=7
+AL_END_YEAR=2025
+AL_END_MONTH=1
+```
+
+---
+
+## Table II – CITADEL Performance (without Active Learning)
+
+To reproduce **Table II** (baseline CITADEL without Active Learning), run the following command:
+
+```bash
+./CITADEL/run_citadel_baseline.sh
+
+```
+
+
+
 ## Acknowledgements
 
 - We thank the authors of the paper "Continuous Learning for Android Malware Detection" and their GitHub repository [Chen-AL](https://github.com/wagner-group/active-learning) for providing the processed datasets (**APIGraph 2012–2018** and **AndroZoo 2019–2021**).  
-- Thanks to the collaborators and my supervisor Dr. Mohammad Saidur Rahman for their guidance and support.  
+- Special thanks to the collaborators and my supervisor Dr. Mohammad Saidur Rahman for their guidance and support.  
