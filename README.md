@@ -78,12 +78,12 @@ python download_LAMDA.py
 This script will download the LAMDA baseline which is a Drebin feature-based Android malware dataset (in .npz format) then, split the .npz files into month-wise subsets.
 
 The resulting directory structure will be automatically organized under:
-
+```
 LAMDA_dataset/
 ├── NPZ_Version/
 │   ├── npz_Baseline/
 │   └── npz_Baseline_MonthWise/
-
+```
 
 ## Running CITADEL
 
