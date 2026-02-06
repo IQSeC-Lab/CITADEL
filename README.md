@@ -241,4 +241,4 @@ To reproduce **Table II** (baseline CITADEL without Active Learning), run the fo
 ## Acknowledgements
 
 - We thank the authors of the paper "Continuous Learning for Android Malware Detection" and their GitHub repository [Chen-AL](https://github.com/wagner-group/active-learning) for providing the processed datasets (**APIGraph 2012–2018** and **AndroZoo 2019–2021**).  
-- Special thanks to the collaborators and my supervisor and collaborators for their guidance and support.  
+- Special thanks to the collaborators and my supervisor for their guidance and support.  
