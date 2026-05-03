@@ -103,7 +103,7 @@ To run **CITADEL** on all three Android malware benchmark datasets (**API-Graph,
 ```bash
 ## Script to run CITADEL with active learning on the API-Graph dataset
 DATASET="apigraph"
-DATA_DIR="/home/mhaque3/myDir/data/gen_apigraph_drebin/"
+DATA_DIR="/data/gen_apigraph_drebin/"
 UC='priority'
 BUDGET=400
 AUG="random_bit_flip_bernoulli"
@@ -198,7 +198,7 @@ To ensure stable training, we recommend reducing the **batch size** to `128` and
 
 ```bash
 DATASET="chen-androzoo"
-DATA_DIR="/home/mhaque3/myDir/data/gen_androzoo_drebin/"
+DATA_DIR="/data/gen_androzoo_drebin/"
 LR=0.003
 BATCH_SIZE=128
 AL_BATCH_SIZE=128
