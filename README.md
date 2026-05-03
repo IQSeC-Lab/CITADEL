@@ -10,7 +10,7 @@ CITADEL is a semi-supervised active learning framework for Android malware detec
 It integrates:
 - Malware domain–focused binary feature augmentations
 - FixMatch-based semi-supervised learning
-- Prioritized multi-criteria active sample selection
+- Prioritized multi-query active sample selection
 - Enhanced objective function for separating boundary samples.
 to adapt to malware concept drift.
 
@@ -90,7 +90,7 @@ LAMDA_dataset/
 CITADEL integrates:
 - **Custom Augmentation**: e.g., `random_bit_flip_bernoulli`  
 - **CITADEL Objective Function**: FixMatch + supervised contrastive loss  
-- **Active Learning**: Multi-criteria sample selector (uncertainty, boundary, low-confident)  
+- **Active Learning**: Drift-Adaptive Multi-Query sample selector (uncertainty, boundary, Calibration)  
 
 To run **CITADEL** on all three Android malware benchmark datasets (**API-Graph, Chen-AndroZoo, LAMDA**) with a labeling budget of **400**, use:
 
@@ -104,7 +104,7 @@ To run **CITADEL** on all three Android malware benchmark datasets (**API-Graph,
 ## Script to run CITADEL with active learning on the API-Graph dataset
 DATASET="apigraph"
 DATA_DIR="/data/gen_apigraph_drebin/"
-UC='priority'
+UC='boundary'
 BUDGET=400
 AUG="random_bit_flip_bernoulli"
 SEED=220
