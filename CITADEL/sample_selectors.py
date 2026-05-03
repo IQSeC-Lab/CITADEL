@@ -113,6 +113,88 @@ def select_boundary_samples(model, X_unlabeled, y_unlabeled, top_k=200, batch_si
     return topk_indices, all_margins[topk_indices]
 
 
+# ---------- Neighbor-Calibrated Disagreement (NCD) ----------
+
+def get_neighbor_calibrated_disagreement(model, X_labeled, y_labeled, 
+                                          X_test, k=10, p=2, 
+                                          conf_threshold=0.8,
+                                          batch_size=512):
+    """
+    Neighbor-Calibrated Disagreement: targets samples where the model
+    is BOTH confident AND has high margin (far from boundary), yet 
+    disagrees with the majority label of its k-nearest labeled neighbors.
+    
+    These are samples that boundary proximity and Lp-norm would never 
+    select — the model is sure about them, but it is wrong.
+
+    Score = confidence * margin * disagreement_indicator
+    Only scored if confidence > conf_threshold (filters low-conf noise).
+    """
+    model.eval()
+    device = next(model.parameters()).device
+
+    with torch.no_grad():
+        enc_lab = model.encode(X_labeled.to(device))
+        enc_test = model.encode(X_test.to(device))
+
+    y_labeled_cpu = y_labeled.cpu().long()
+
+    # Get model predictions, confidence, and margins
+    all_preds = []
+    all_confs = []
+    all_margins = []
+    with torch.no_grad():
+        for i in range(0, X_test.size(0), batch_size):
+            xb = X_test[i:i+batch_size].to(device)
+            logits = model(xb)
+            probs = F.softmax(logits, dim=1)
+            confs = probs.max(dim=1).values.cpu()
+            preds = probs.argmax(dim=1).cpu()
+            top2 = torch.topk(probs, 2, dim=1).values
+            margins = (top2[:, 0] - top2[:, 1]).cpu()
+            all_preds.append(preds)
+            all_confs.append(confs)
+            all_margins.append(margins)
+
+    all_preds = torch.cat(all_preds)
+    all_confs = torch.cat(all_confs)
+    all_margins = torch.cat(all_margins)
+
+    # For each test sample, find k-nearest labeled neighbors
+    ncd_scores = torch.zeros(X_test.size(0))
+
+    with torch.no_grad():
+        for i in range(0, enc_test.size(0), batch_size):
+            end = min(i + batch_size, enc_test.size(0))
+            batch = enc_test[i:end]
+            dists = torch.cdist(batch, enc_lab, p=p)
+            _, knn_idx = torch.topk(dists, k, dim=1, largest=False)
+            knn_idx = knn_idx.cpu()
+
+            for j in range(knn_idx.size(0)):
+                idx = i + j
+                model_conf = all_confs[idx].item()
+                model_margin = all_margins[idx].item()
+
+                # Only consider confident, high-margin samples
+                # These are the ones M and D_lp will NOT select
+                if model_conf < conf_threshold:
+                    continue
+
+                neighbor_labels = y_labeled_cpu[knn_idx[j]]
+                malware_count = (neighbor_labels == 1).sum().item()
+                benign_count = (neighbor_labels == 0).sum().item()
+                neighbor_majority = 1 if malware_count > benign_count else 0
+
+                model_pred = all_preds[idx].item()
+
+                if model_pred != neighbor_majority:
+                    # Score: higher confidence AND higher margin = worse
+                    # These are the most dangerous overconfident samples
+                    ncd_scores[idx] = model_conf * model_margin
+
+    return ncd_scores
+
 
 def prioritized_uncertainty_selection(
     model,
