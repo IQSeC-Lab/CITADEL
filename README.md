@@ -4,12 +4,12 @@ In this research, we propose semi-supervised active learning framework that inte
 
 -->
 
-# CITADEL: A Semi-Supervised Active Learning Framework for Malware Detection Under Continuous Distribution Drift
+# CITADEL: A Semi-Supervised Active Learning Framework for Malware Detection Under Longitudinal Distribution Drift
 
 CITADEL is a semi-supervised active learning framework for Android malware detection designed to handle **long-term concept drift**.  
 It integrates:
 - Malware domain–focused binary feature augmentations
-- FixMatch-based semi-supervised learning
+- Semi-supervised learning for drift adaptation
 - Prioritized multi-query active sample selection
 - Enhanced objective function for separating boundary samples.
 to adapt to malware concept drift.
@@ -51,18 +51,19 @@ All dependencies are specified in: `environment.yml` (Conda)
 
 ## Datasets
 
-We evaluate on three Android malware datasets:
+We evaluate on four Android malware datasets:
 
 - APIGraph (2012–2018)
 - Chen-AndroZoo (2019–2021)
 - LAMDA (2013–2025)
+- MaMaDroid Curated (2013-2025)
 
 Please follow the steps below to download and preprocess them:
 
 For APIGraph and Chen-AndroZoo, For APIGraph and Chen-AndroZoo, we use the datasets provided in the paper "Continuous Learning for Android Malware Detection", which are available through their official [active-learning](https://github.com/wagner-group/active-learning).  
 
 ### Download APIGraph (2012–2018) and Chen-AZ (2019-2021) dataset
-- Download the datasets [here](https://drive.google.com/file/d/1O0upEcTolGyyvasCPkZFY86FNclk29XO/view?usp=drive_link) provided by the [active-learning](https://github.com/wagner-group/active-learning) repository.
+- Download the datasets [here](https://drive.google.com/file/d/1O0upEcTolGyyvasCPkZFY86FNclk29XO/view?usp=drive_link).
 - Extract the downloaded zip into the `data/` directory:  `data/gen_apigraph_drebin` and `data/gen_androzoo_drebin`
 
 ### Download LAMDA (2013-2025) dataset
@@ -85,6 +86,13 @@ LAMDA_dataset/
 │   └── npz_Baseline_MonthWise/
 ```
 
+### Download MaMaDroid (2013–2025) curated dataset
+
+We curated this MaMaDroid benchmark by processing APKs obtained from AndroZoo through the original MaMaDroid feature-extraction pipeline. The curated dataset is released as a contribution of this paper.
+
+- **Download:** [Zenodo deposit](https://doi.org/10.5281/zenodo.18500609)
+- **DOI:** [10.5281/zenodo.18500609](https://doi.org/10.5281/zenodo.18500609)
+
 ## Running CITADEL
 
 CITADEL integrates:
@@ -92,7 +100,7 @@ CITADEL integrates:
 - **CITADEL Objective Function**: FixMatch + supervised contrastive loss  
 - **Active Learning**: Drift-Adaptive Multi-Query sample selector (uncertainty, boundary, Calibration)  
 
-To run **CITADEL** on all three Android malware benchmark datasets (**API-Graph, Chen-AndroZoo, LAMDA**) with a labeling budget of **400**, use:
+To run **CITADEL** on Android malware benchmark datasets (**API-Graph, Chen-AndroZoo, LAMDA, MaMaDroid**) with a labeling budget of **400**, use:
 
 ```bash
 ./CITADEL/run_citadel.sh
