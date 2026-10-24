@@ -90,8 +90,8 @@ LAMDA_dataset/
 
 We curated this MaMaDroid benchmark by processing APKs obtained from AndroZoo through the original MaMaDroid feature-extraction pipeline. The curated dataset is released as a contribution of this paper.
 
-- **Download:** [Zenodo deposit](https://doi.org/10.5281/zenodo.18500609)
-- **DOI:** [10.5281/zenodo.18500609](https://doi.org/10.5281/zenodo.18500609)
+- **Download:** [Hugging Face](https://huggingface.co/datasets/IQSeC-Lab/mamadroid_citadel)
+- **DOI:** [10.57967/hf/11237](10.57967/hf/11237)
 
 ## Running CITADEL
 
